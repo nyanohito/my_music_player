@@ -1,0 +1,66 @@
+name: local_music_player
+description: "完全オフライン・高音質特化型のローカル音楽プレイヤー"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ── 音声再生コア ──────────────────────────────────────────
+  # バックグラウンド再生・Bluetooth対応の音声プレイヤー
+  just_audio: ^0.9.40
+  # iOS/Android バックグラウンド再生 + ロック画面コントロール
+  just_audio_background: ^0.0.1-beta.12
+  # オーディオセッション管理（他アプリとの共存、カー連携）
+  audio_session: ^0.1.21
+
+  # ── データベース & 永続化 ──────────────────────────────────
+  # SQLite database for data persistence
+  sqflite: ^2.3.3
+  # SQLite FFI for Windows/Linux desktop support
+  sqflite_common_ffi: ^2.3.3
+  # SQLite native library for Flutter apps
+  sqlite3_flutter_libs: ^0.5.24
+  # UUID generation for database IDs
+  uuid: ^4.4.2
+
+  # ── 状態管理 ─────────────────────────────────────────────
+  # モダンな状態管理ライブラリ（Provider の進化版）
+  flutter_riverpod: ^2.5.1
+  # Riverpod のコード生成サポート（将来の拡張用）
+  riverpod_annotation: ^2.3.5
+
+  # ── ファイル操作 ──────────────────────────────────────────
+  # ファイルアプリから音楽ファイル・LRCを選択するピッカー
+  file_picker: ^8.1.2
+  # アプリの Documents ディレクトリ等のパスを取得
+  path_provider: ^2.1.4
+  # パス文字列の操作（拡張子取得など）
+  path: ^1.9.0
+  # 音声ファイルのメタデータ抽出（アルバムアートワーク取得）
+  audiotags: ^1.0.1
+  # Android/iOSストレージ権限リクエスト
+  permission_handler: ^11.3.1
+
+  # ── UI・UX ────────────────────────────────────────────────
+  cupertino_icons: ^1.0.8
+  # Progress bar component for now playing screen
+  audio_video_progress_bar: ^2.0.2
+  just_audio_windows: ^0.2.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  # Riverpod コード生成（将来 @riverpod アノテーションを使うとき）
+  riverpod_generator: ^2.4.3
+  build_runner: ^2.4.11
+
+flutter:
+  uses-material-design: true
+  # assets:
+  #   - assets/images/  ← アルバムアートのデフォルト画像などを後で追加

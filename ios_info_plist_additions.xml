@@ -1,0 +1,44 @@
+<!-- ============================================================ -->
+<!-- ios/Runner/Info.plist への追加設定                           -->
+<!-- ============================================================ -->
+<!--                                                              -->
+<!-- 既存の Info.plist の <dict> タグの中に以下を追加してください  -->
+<!--                                                              -->
+<!-- ① Xcode で ios/Runner/Info.plist を開く                     -->
+<!-- ② 既存の内容の最後の </dict> の直前に貼り付ける              -->
+<!--                                                              -->
+<!-- ============================================================ -->
+
+    <!-- ★ バックグラウンド再生を許可（これがないと画面を閉じると止まる） -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+
+    <!-- ★ ファイルアプリとの連携を許可 -->
+    <key>UIFileSharingEnabled</key>
+    <true/>
+
+    <!-- ★ ファイルアプリ内でインプレース編集を許可 -->
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+
+    <!-- file_picker  that doesn't use microphone to read files -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Used for music file playback</string>
+
+    <!-- Media access permission for music files -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>This app needs access to your media library to select and play music files</string>
+
+<!-- ============================================================ -->
+<!-- ✅ 設定後の動作確認チェックリスト                            -->
+<!--                                                              -->
+<!--   □ アプリを起動して「曲を追加」をタップ                     -->
+<!--   □ ファイルアプリから .mp3 や .flac を選択                  -->
+<!--   □ 自動的に再生が始まる                                     -->
+<!--   □ 「歌詞 (LRC)」をタップして .lrc を選択                   -->
+<!--   □ 再生画面で歌詞ボタンを押して歌詞が動くか確認             -->
+<!--   □ ホームボタンを押してもバックグラウンドで再生が続くか確認 -->
+<!--   □ ロック画面にコントロールが表示されるか確認               -->
+<!-- ============================================================ -->
