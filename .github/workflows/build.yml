@@ -23,6 +23,11 @@ jobs:
           rm -rf ios/
           flutter create --platforms=ios .
 
+      - name: Fetch Dependencies & Gen Podfile
+        run: |
+          flutter pub get
+          flutter build ios --config-only || true
+
       - name: Add iOS Permissions
         run: |
           plutil -insert UIBackgroundModes -json '["audio"]' ios/Runner/Info.plist
@@ -31,24 +36,32 @@ jobs:
 
       - name: Patch Podfile for Rust/Strap
         run: |
-          ruby -i -e "
-            content = File.read('ios/Podfile')
-            content.sub!(/# platform :ios, .*/, 'platform :ios, \"13.0\"')
-            injection = <<-RUBY
-              flutter_additional_ios_build_settings(target)
-              target.build_configurations.each do |config|
-                config.build_settings['STRIP_STYLE'] = 'non-global'
-                config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-              end
-            RUBY
-            content.sub!('flutter_additional_ios_build_settings(target)', injection)
-            File.write('ios/Podfile', content)
+          python3 -c "
+          import sys
+          import re
+          
+          try:
+              with open('ios/Podfile', 'r') as f:
+                  content = f.read()
+                  
+              # iOSバージョンを13.0に強制固定
+              content = re.sub(r'^#? ?platform :ios.*', \"platform :ios, '13.0'\", content, flags=re.MULTILINE)
+              
+              # 必要な部品が捨てられないように設定を追加
+              target_str = 'flutter_additional_ios_build_settings(target)'
+              injection = target_str + '\n      target.build_configurations.each do |config|\n        config.build_settings[\"STRIP_STYLE\"] = \"non-global\"\n        config.build_settings[\"DEAD_CODE_STRIPPING\"] = \"NO\"\n        config.build_settings[\"IPHONEOS_DEPLOYMENT_TARGET\"] = \"13.0\"\n      end'
+              
+              content = content.replace(target_str, injection)
+              
+              with open('ios/Podfile', 'w') as f:
+                  f.write(content)
+              print('Podfile successfully patched')
+          except Exception as e:
+              print(f'Error: {e}')
+              sys.exit(1)
           "
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build iOS (No Codesign)
+      - name: Build iOS
         run: flutter build ios --release --no-codesign
 
       - name: Package into IPA
