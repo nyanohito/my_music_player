@@ -8,7 +8,6 @@ on:
 jobs:
   build:
     runs-on: macos-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,47 +17,68 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate iOS project
+      - name: Install Rust Apple Targets
+        run: |
+          rustup target add aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
+
+      - name: Generate iOS project & Podfile
         run: |
           rm -rf ios/
           flutter create --platforms=ios .
-
-      - name: Fetch Dependencies & Gen Podfile
-        run: |
           flutter pub get
           flutter build ios --config-only || true
 
       - name: Add iOS Permissions
         run: |
-          plutil -insert UIBackgroundModes -json '["audio"]' ios/Runner/Info.plist
-          plutil -insert NSPhotoLibraryUsageDescription -string "ローカルの音楽ファイルを読み込むためにアクセス権限が必要です。" ios/Runner/Info.plist
-          plutil -insert NSAppleMusicUsageDescription -string "ローカルの音楽ファイルを読み込むためにアクセス権限が必要です。" ios/Runner/Info.plist
+          # 既存キーは -replace、なければ -insert で確実に書き込む
+          plutil -replace UIBackgroundModes -json '["audio"]' ios/Runner/Info.plist || \
+          plutil -insert  UIBackgroundModes -json '["audio"]' ios/Runner/Info.plist
 
-      - name: Patch Podfile for Rust/Strap
+          plutil -replace NSPhotoLibraryUsageDescription -string "ローカルの音楽ファイルを読み込むためにアクセス権限が必要です。" ios/Runner/Info.plist || \
+          plutil -insert  NSPhotoLibraryUsageDescription -string "ローカルの音楽ファイルを読み込むためにアクセス権限が必要です。" ios/Runner/Info.plist
+
+          plutil -replace NSAppleMusicUsageDescription -string "ローカルの音楽ファイルを読み込むためにアクセス権限が必要です。" ios/Runner/Info.plist || \
+          plutil -insert  NSAppleMusicUsageDescription -string "ローカルの音楽ファイルを読み込むためにアクセス権限が必要です。" ios/Runner/Info.plist
+
+      - name: Disable Dead Code Stripping
         run: |
           python3 -c "
-          import sys
-          import re
-          
-          try:
+          import os
+
+          # 1. Podfile の設定
+          if os.path.exists('ios/Podfile'):
               with open('ios/Podfile', 'r') as f:
-                  content = f.read()
-                  
-              # iOSバージョンを13.0に強制固定
-              content = re.sub(r'^#? ?platform :ios.*', \"platform :ios, '13.0'\", content, flags=re.MULTILINE)
-              
-              # 必要な部品が捨てられないように設定を追加
-              target_str = 'flutter_additional_ios_build_settings(target)'
-              injection = target_str + '\n      target.build_configurations.each do |config|\n        config.build_settings[\"STRIP_STYLE\"] = \"non-global\"\n        config.build_settings[\"DEAD_CODE_STRIPPING\"] = \"NO\"\n        config.build_settings[\"IPHONEOS_DEPLOYMENT_TARGET\"] = \"13.0\"\n      end'
-              
-              content = content.replace(target_str, injection)
-              
+                  podfile = f.read()
+
+              podfile = podfile.replace('# platform :ios, \'12.0\'', 'platform :ios, \'13.0\'')
+              podfile = podfile.replace('# platform :ios, \'11.0\'', 'platform :ios, \'13.0\'')
+
+              injection = '''
+                flutter_additional_ios_build_settings(target)
+                target.build_configurations.each do |config|
+                  config.build_settings['STRIP_STYLE'] = 'non-global'
+                  config.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
+                  config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+                end
+              '''
+              podfile = podfile.replace('flutter_additional_ios_build_settings(target)', injection)
+
               with open('ios/Podfile', 'w') as f:
-                  f.write(content)
-              print('Podfile successfully patched')
-          except Exception as e:
-              print(f'Error: {e}')
-              sys.exit(1)
+                  f.write(podfile)
+
+          # 2. project.pbxproj の設定
+          pbx_path = 'ios/Runner.xcodeproj/project.pbxproj'
+          if os.path.exists(pbx_path):
+              with open(pbx_path, 'r') as f:
+                  pbx = f.read()
+
+              pbx = pbx.replace('DEAD_CODE_STRIPPING = YES;', 'DEAD_CODE_STRIPPING = NO;')
+              pbx = pbx.replace('IPHONEOS_DEPLOYMENT_TARGET = 12.0;', 'IPHONEOS_DEPLOYMENT_TARGET = 13.0;')
+              pbx = pbx.replace('IPHONEOS_DEPLOYMENT_TARGET = 11.0;', 'IPHONEOS_DEPLOYMENT_TARGET = 13.0;')
+              pbx = pbx.replace('IPHONEOS_DEPLOYMENT_TARGET = 9.0;',  'IPHONEOS_DEPLOYMENT_TARGET = 13.0;')
+
+              with open(pbx_path, 'w') as f:
+                  f.write(pbx)
           "
 
       - name: Build iOS
