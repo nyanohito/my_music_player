@@ -27,7 +27,6 @@ jobs:
           rm -rf ios/
           flutter create --platforms=ios .
           flutter pub get
-          # ✅ flutter build ios --config-only を削除しました
 
       - name: Add iOS Permissions
         run: |
@@ -81,7 +80,7 @@ jobs:
               pbx = pbx.replace('IPHONEOS_DEPLOYMENT_TARGET = 11.0;', 'IPHONEOS_DEPLOYMENT_TARGET = 13.0;')
               pbx = pbx.replace('IPHONEOS_DEPLOYMENT_TARGET = 9.0;',  'IPHONEOS_DEPLOYMENT_TARGET = 13.0;')
 
-              pbx = re.sub(r'DEVELOPMENT_TEAM = [A-Z0-9]*;', 'DEVELOPMENT_TEAM = \"\";', pbx)
+              pbx = re.sub(r'DEVELOPMENT_TEAM = [A-Z0-9\"]*;', 'DEVELOPMENT_TEAM = \"\";', pbx)
               pbx = re.sub(r'CODE_SIGN_IDENTITY = \".*?\";', 'CODE_SIGN_IDENTITY = \"\";', pbx)
               pbx = pbx.replace('CODE_SIGNING_REQUIRED = YES;', 'CODE_SIGNING_REQUIRED = NO;')
               pbx = pbx.replace('CODE_SIGNING_ALLOWED = YES;',  'CODE_SIGNING_ALLOWED = NO;')
@@ -91,6 +90,13 @@ jobs:
           "
 
       - name: Build iOS
+        # ✅ FLUTTER_XCODE_* 環境変数を使って xcodebuild に直接署名設定を渡す
+        # pbxproj の書き換えが pod install で上書きされても、これで確実に無効化できる
+        env:
+          FLUTTER_XCODE_DEVELOPMENT_TEAM: ""
+          FLUTTER_XCODE_CODE_SIGN_IDENTITY: ""
+          FLUTTER_XCODE_CODE_SIGNING_REQUIRED: "NO"
+          FLUTTER_XCODE_CODE_SIGNING_ALLOWED: "NO"
         run: flutter build ios --release --no-codesign
 
       - name: Package into IPA
