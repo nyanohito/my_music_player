@@ -348,8 +348,9 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final String title = p.basenameWithoutExtension(filePath);
 
       // Extract artist from metadata, fallback to 'Unknown Artist'
-      final String artist = (tags != null && tags.artist != null && tags.artist!.isNotEmpty)
-          ? tags.artist!
+      // ✅ 最新の audiotags 1.4.5 の仕様に合わせて trackArtist に修正
+      final String artist = (tags != null && tags.trackArtist != null && tags.trackArtist!.isNotEmpty)
+          ? tags.trackArtist!
           : 'Unknown Artist';
 
       return Song(
