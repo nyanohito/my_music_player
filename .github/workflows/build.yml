@@ -17,9 +17,13 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Install Rust Apple Targets
+      - name: Install Rust Apple Targets & Link Tools
         run: |
           rustup target add aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
+          # ✅ ここが抜け落ちていました！Xcodeが絶対にRustを見失わないようにショートカットを作成
+          sudo ln -sf ~/.cargo/bin/cargo /usr/local/bin/cargo
+          sudo ln -sf ~/.cargo/bin/rustup /usr/local/bin/rustup
+          sudo ln -sf ~/.cargo/bin/rustc /usr/local/bin/rustc
 
       - name: Generate iOS project
         run: |
@@ -46,7 +50,6 @@ jobs:
           echo 'DEVELOPMENT_TEAM = ""' >> ios/Flutter/Generated.xcconfig
           echo 'CODE_SIGN_STYLE = Manual' >> ios/Flutter/Generated.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) -Wl,-ld_classic' >> ios/Flutter/Generated.xcconfig
-          # ✅ ここが最大の鍵！XcodeにRust翻訳機の場所を直接教え込む
           echo 'PATH = ${PATH}:/Users/runner/.cargo/bin' >> ios/Flutter/Generated.xcconfig
 
       - name: Patch Xcode project settings
