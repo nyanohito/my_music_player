@@ -42,7 +42,7 @@ dependencies:
   # パス文字列の操作（拡張子取得など）
   path: ^1.9.0
   # 音声ファイルのメタデータ抽出（アルバムアートワーク取得）
-  metadata_god: ^0.5.0  # ← 代わりにこれを追加
+  metadata_god: ^1.1.0  # ← 代わりにこれを追加
   # Android/iOSストレージ権限リクエスト
   permission_handler: ^11.3.1
 
