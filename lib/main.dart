@@ -14,12 +14,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:metadata_god/metadata_god.dart'; // ✅ 追加
 
 import 'app.dart';
 
 Future<void> main() async {
   // Flutter エンジンの初期化を確実に行う（非同期処理の前に必要）
   WidgetsFlutterBinding.ensureInitialized();
+  MetadataGod.initialize(); // ✅ 追加：音楽メタデータ読み込みの準備
 
   // Initialize SQLite for Windows/Linux desktop platforms
   if (Platform.isWindows || Platform.isLinux) {

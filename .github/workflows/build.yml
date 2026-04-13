@@ -17,19 +17,6 @@ jobs:
         with:
           channel: 'stable'
 
-      # audiotags は flutter_rust_bridge 経由で Rust を使う
-      - name: Install Rust Apple Targets
-        run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          rustup target add aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
-          # Xcode が確実に cargo を見つけられるようにシステムPATHに追加
-          sudo ln -sf "$HOME/.cargo/bin/cargo"  /usr/local/bin/cargo
-          sudo ln -sf "$HOME/.cargo/bin/rustc"  /usr/local/bin/rustc
-          sudo ln -sf "$HOME/.cargo/bin/rustup" /usr/local/bin/rustup
-          # 確認
-          cargo --version
-          rustc --version
-
       - name: Generate iOS project
         run: |
           rm -rf ios/
@@ -45,72 +32,50 @@ jobs:
           plutil -replace NSAppleMusicUsageDescription -string "ローカルの音楽ファイルを読み込むためにアクセス権限が必要です。" ios/Runner/Info.plist || \
           plutil -insert  NSAppleMusicUsageDescription -string "ローカルの音楽ファイルを読み込むためにアクセス権限が必要です。" ios/Runner/Info.plist
 
-      - name: Patch Xcode project settings & inject cargo PATH
+      - name: Patch Xcode project settings (Ad-hoc Sign)
         run: |
           python3 -c "
           import os, re
-
-          cargo_bin = os.path.expanduser('~/.cargo/bin')
-
-          # ── 1. Podfile ──────────────────────────────────────────
           if os.path.exists('ios/Podfile'):
               with open('ios/Podfile', 'r') as f:
                   podfile = f.read()
-
-              # platform 行を置換（コメント有無どちらも対応）
               podfile = re.sub(r'^#?\s*platform :ios.*', \"platform :ios, '13.0'\", podfile, flags=re.MULTILINE)
-
               if 'flutter_additional_ios_build_settings(target)' in podfile:
-                  injection = f'''
+                  injection = '''
                 flutter_additional_ios_build_settings(target)
                 target.build_configurations.each do |config|
                   config.build_settings['STRIP_STYLE'] = 'non-global'
                   config.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
                   config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-                  # ✅ パッケージ化失敗を防ぐため、完全無効化ではなく「ダミー署名（-）」を使用
                   config.build_settings['CODE_SIGN_IDENTITY'] = '-'
                   config.build_settings['CODE_SIGN_STYLE'] = 'Manual'
                   config.build_settings['DEVELOPMENT_TEAM'] = ''
-                  # ✅ Xcode のビルドフェーズに cargo の場所を直接教える
-                  existing_path = config.build_settings['PATH'] || '/usr/bin:/bin:/usr/sbin:/sbin'
-                  config.build_settings['PATH'] = \"{cargo_bin}:\" + existing_path
-                  # ✅ 念のため Xcode 15 のリンカー対策も維持
-                  config.build_settings['OTHER_LDFLAGS'] = ['$(inherited)', '-Wl,-ld_classic']
                 end
               '''
                   podfile = podfile.replace('flutter_additional_ios_build_settings(target)', injection)
-
               with open('ios/Podfile', 'w') as f:
                   f.write(podfile)
 
-          # ── 2. project.pbxproj ──────────────────────────────────
           pbx_path = 'ios/Runner.xcodeproj/project.pbxproj'
           if os.path.exists(pbx_path):
               with open(pbx_path, 'r') as f:
                   pbx = f.read()
-
               pbx = pbx.replace('DEAD_CODE_STRIPPING = YES;', 'DEAD_CODE_STRIPPING = NO;')
               pbx = re.sub(r'IPHONEOS_DEPLOYMENT_TARGET = \d+\.\d+;', 'IPHONEOS_DEPLOYMENT_TARGET = 13.0;', pbx)
               pbx = re.sub(r'DEVELOPMENT_TEAM = [A-Z0-9\"]*;', 'DEVELOPMENT_TEAM = \"\";', pbx)
-              
-              # ✅ こちらもダミー署名に設定
               pbx = re.sub(r'CODE_SIGN_IDENTITY = \".*?\";', 'CODE_SIGN_IDENTITY = \"-\";', pbx)
               pbx = pbx.replace('CODE_SIGNING_REQUIRED = YES;', 'CODE_SIGNING_REQUIRED = NO;')
               pbx = pbx.replace('CODE_SIGNING_ALLOWED = YES;',  'CODE_SIGNING_ALLOWED = NO;')
               pbx = re.sub(r'CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;', pbx)
-
               with open(pbx_path, 'w') as f:
                   f.write(pbx)
           "
 
-      # ✅ FLUTTER_XCODE_* + PATH環境変数でビルド時も cargo を確実に渡す
       - name: Build iOS
         env:
           FLUTTER_XCODE_DEVELOPMENT_TEAM: ""
           FLUTTER_XCODE_CODE_SIGN_IDENTITY: "-"
           FLUTTER_XCODE_CODE_SIGN_STYLE: "Manual"
-          # ✅ flutter build が内部で xcodebuild を呼ぶときの PATH にも cargo を追加
-          PATH: "/Users/runner/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         run: flutter build ios --release --no-codesign
 
       - name: Package into IPA
