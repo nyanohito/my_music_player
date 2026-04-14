@@ -1,16 +1,219 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
+import 'package:audio_session/audio_session.dart';
+import 'package:palette_generator/palette_generator.dart';
 import '../providers/audio_player_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/database_helper.dart';
 import '../widgets/lyric_view.dart';
 
-class NowPlayingScreen extends ConsumerWidget {
+class NowPlayingScreen extends ConsumerStatefulWidget {
   const NowPlayingScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NowPlayingScreen> createState() => _NowPlayingScreenState();
+}
+
+class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
+  double _playbackSpeed = 1.0;
+  double _pitch = 0.0;
+  Color? _dominantColor;
+
+  Future<Color> _extractDominantColor(Uint8List? imageBytes) async {
+    if (imageBytes == null) return AppColors.background;
+    
+    try {
+      final paletteGenerator = PaletteGenerator.fromImageProvider(
+        MemoryImage(imageBytes),
+      );
+      final palette = await paletteGenerator.generate();
+      
+      if (palette.colors.isNotEmpty) {
+        return palette.colors.first.color;
+      }
+    } catch (e) {
+      print('Failed to extract dominant color: $e');
+    }
+    
+    return AppColors.background;
+  }
+
+  void _showAudioSettingsBottomSheet(BuildContext context) {
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: AppColors.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) {
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 再生速度
+              Text(
+                '再生速度: ${_playbackSpeed.toStringAsFixed(1)}x',
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Slider(
+                value: _playbackSpeed,
+                min: 0.5,
+                max: 2.0,
+                divisions: 15,
+                activeColor: AppColors.accent,
+                inactiveColor: AppColors.surfaceVariant,
+                onChanged: (value) {
+                  setState(() => _playbackSpeed = value);
+                  // TODO: just_audioで再生速度を適用
+                },
+              ),
+              const SizedBox(height: 24),
+              
+              // ピッチ（キー）
+              Text(
+                'ピッチ: ${_pitch.toStringAsFixed(1)}',
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Slider(
+                value: _pitch,
+                min: -6.0,
+                max: 6.0,
+                divisions: 12,
+                activeColor: AppColors.accent,
+                inactiveColor: AppColors.surfaceVariant,
+                onChanged: (value) {
+                  setState(() => _pitch = value);
+                  // TODO: just_audioでピッチを適用
+                },
+              ),
+              const SizedBox(height: 24),
+              
+              // 閉じるボタン
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('閉じる'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    ),
+  );
+}
+
+void _showLyricsFullScreen(BuildContext context) {
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.black,
+    isScrollControlled: true,
+    builder: (context) => DraggableScrollableSheet(
+      initialChildSize: 0.9,
+      maxChildSize: 1.0,
+      minChildSize: 0.5,
+      builder: (context, scrollController) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            // ヘッダー
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  '歌詞',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            // 歌詞全文
+            Expanded(
+              child: SingleChildScrollView(
+                controller: scrollController,
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: playerState.currentSong?.lyrics.map((lyric) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      lyric.text,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        height: 1.6,
+                      ),
+                    ),
+                  )).toList() ?? [],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+void _showAudioRoutePicker(BuildContext context) async {
+    try {
+      final session = await AudioSession.instance;
+      // iOSの出力先切り替えダイアログを表示
+      await session.setActive(true);
+      // 注：audio_sessionパッケージには直接のルートピッカー機能がないため
+      // 将来的にはPlatform.isIOSの場合に特別な実装が必要
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('iOSの設定で出力先を変更してください'),
+          backgroundColor: AppColors.accent,
+        ),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('出力先の変更に失敗しました: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final playerState = ref.watch(audioPlayerProvider);
     final notifier = ref.read(audioPlayerProvider.notifier);
     final currentSong = playerState.currentSong;
@@ -23,8 +226,17 @@ class NowPlayingScreen extends ConsumerWidget {
       );
     }
 
+    // アートワークからドミナントカラーを抽出
+    if (_dominantColor == null && currentSong.albumArt != null) {
+      _extractDominantColor(currentSong.albumArt).then((color) {
+        if (mounted) {
+          setState(() => _dominantColor = color);
+        }
+      });
+    }
+
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: _dominantColor ?? AppColors.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -34,7 +246,13 @@ class NowPlayingScreen extends ConsumerWidget {
         ),
         title: const Text('再生中', style: TextStyle(color: AppColors.textPrimary, fontSize: 16)),
         centerTitle: true,
-      ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.tune, color: AppColors.textPrimary),
+            onPressed: () => _showAudioSettingsBottomSheet(context),
+            tooltip: '音質・再生設定',
+          ),
+        ],
       body: LayoutBuilder(
         builder: (context, constraints) {
           final isSmallScreen = constraints.maxHeight < 600;
@@ -129,6 +347,98 @@ class NowPlayingScreen extends ConsumerWidget {
                     );
                   },
                 ),
+                SizedBox(height: isSmallScreen ? 10 : 20),
+                
+                // 歌詞表示
+                if (currentSong.lyrics.isNotEmpty)
+                  Container(
+                    height: 120,
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceVariant.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: LyricView(),
+                  ),
+                
+                // 歌詞カードと拡張ボタン
+                if (currentSong.lyrics.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Column(
+                      children: [
+                        // 歌詞プレビューカード
+                        Container(
+                          height: 80,
+                          decoration: BoxDecoration(
+                            color: (_dominantColor ?? AppColors.surface).withOpacity(0.8),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '歌詞プレビュー',
+                                        style: TextStyle(
+                                          color: Colors.white.withValues(alpha: 0.9),
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        currentSong.lyrics.take(3).map((lyric) => lyric.text).join(' '),
+                                        style: TextStyle(
+                                          color: Colors.white.withValues(alpha: 0.7),
+                                          fontSize: 11,
+                                          height: 1.4,
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.fullscreen, color: Colors.white.withValues(alpha: 0.9)),
+                                onPressed: () => _showLyricsFullScreen(context),
+                                tooltip: '歌詞を全画面表示',
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                SizedBox(height: isSmallScreen ? 20 : 30),
+                
+                // 出力先変更ボタン
+                if (Platform.isIOS)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.speaker_group, color: AppColors.textSecondary),
+                          onPressed: () => _showAudioRoutePicker(context),
+                          tooltip: '出力先を変更',
+                        ),
+                        const SizedBox(width: 10),
+                        const Text(
+                          '出力先',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                        ),
+                      ],
+                    ),
+                  ),
                 SizedBox(height: isSmallScreen ? 10 : 20),
                 
                 // コントロールボタン

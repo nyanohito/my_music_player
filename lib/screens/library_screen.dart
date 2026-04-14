@@ -51,6 +51,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         }
         return true;
       }).toList();
+      
+      // タイトル名でソート（A-Z/あいうえお順）
+      displaySongs.sort((a, b) => a.title.compareTo(b.title));
     }
 
     return Scaffold(

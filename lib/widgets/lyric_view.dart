@@ -36,6 +36,7 @@ class _LyricViewState extends ConsumerState<LyricView> {
   @override
   Widget build(BuildContext context) {
     final playerState = ref.watch(audioPlayerProvider);
+    final notifier = ref.read(audioPlayerProvider.notifier);
     final lyrics = playerState.currentSong?.lyrics ?? [];
     final currentIndex = playerState.currentLyricIndex;
 
@@ -60,9 +61,15 @@ class _LyricViewState extends ConsumerState<LyricView> {
         vertical: MediaQuery.of(context).size.height * 0.25,
       ),
       itemBuilder: (context, index) {
-        return _LyricLineItem(
-          lyricLine: lyrics[index],
-          state: _getLineState(index, currentIndex),
+        return InkWell(
+          onTap: () {
+            // タップで歌詞のタイムスタンプへシーク
+            notifier.seekTo(lyrics[index].position);
+          },
+          child: _LyricLineItem(
+            lyricLine: lyrics[index],
+            state: _getLineState(index, currentIndex),
+          ),
         );
       },
     );
