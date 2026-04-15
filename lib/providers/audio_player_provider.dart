@@ -58,8 +58,6 @@ class AudioPlayerState {
   final bool isShuffleModeEnabled;
   final PlaylistMode repeatMode;
   final List<Map<String, dynamic>> playlists;
-  final bool isEqualizerEnabled;
-  final List<double> equalizerGains;
   final double playbackSpeed;
   final double pitch;
 
@@ -75,8 +73,6 @@ class AudioPlayerState {
     this.isShuffleModeEnabled = false,
     this.repeatMode = PlaylistMode.off,
     this.playlists = const [],
-    this.isEqualizerEnabled = false,
-    this.equalizerGains = const [0.0, 0.0, 0.0, 0.0, 0.0],
     this.playbackSpeed = 1.0,
     this.pitch = 0.0,
   });
@@ -94,8 +90,6 @@ class AudioPlayerState {
     bool? isShuffleModeEnabled,
     PlaylistMode? repeatMode,
     List<Map<String, dynamic>>? playlists,
-    bool? isEqualizerEnabled,
-    List<double>? equalizerGains,
     double? playbackSpeed,
     double? pitch,
   }) {
@@ -111,8 +105,6 @@ class AudioPlayerState {
       isShuffleModeEnabled: isShuffleModeEnabled ?? this.isShuffleModeEnabled,
       repeatMode: repeatMode ?? this.repeatMode,
       playlists: playlists ?? this.playlists,
-      isEqualizerEnabled: isEqualizerEnabled ?? this.isEqualizerEnabled,
-      equalizerGains: equalizerGains ?? this.equalizerGains,
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
       pitch: pitch ?? this.pitch,
     );
@@ -764,77 +756,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     return index;
   }
 
-  Future<void> toggleEqualizer() async {
-    if (Platform.isWindows) {
-      state = state.copyWith(
-        errorMessage: 'Equalizer is not supported on Windows',
-      );
-      return;
-    }
-
-    try {
-      final newEnabledState = !state.isEqualizerEnabled;
-      state = state.copyWith(isEqualizerEnabled: newEnabledState);
-      
-      if (newEnabledState) {
-        await _initEqualizer();
-      }
-    } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to toggle equalizer: $e',
-      );
-    }
-  }
-
-  Future<void> setEqualizerGain(int bandIndex, double gain) async {
-    if (Platform.isWindows) {
-      return;
-    }
-
-    try {
-      final newGains = List<double>.from(state.equalizerGains);
-      if (bandIndex >= 0 && bandIndex < newGains.length) {
-        newGains[bandIndex] = gain;
-        state = state.copyWith(equalizerGains: newGains);
-        
-        if (state.isEqualizerEnabled) {
-          await _applyEqualizerSettings();
-        }
-      }
-    } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to set equalizer gain: $e',
-      );
-    }
-  }
-
-  Future<void> _initEqualizer() async {
-    if (Platform.isWindows) return;
-    try {
-      // Initialize equalizer - for now just mark as enabled
-      // Actual audio effect implementation would require platform-specific APIs
-      await _applyEqualizerSettings();
-    } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to initialize equalizer: $e',
-      );
-    }
-  }
-
-  Future<void> _applyEqualizerSettings() async {
-    if (Platform.isWindows) return;
-    
-    try {
-      // Store equalizer settings in state
-      // Future implementation would apply these to actual audio effects
-      // For now, the UI will show the selected values but no audio change occurs
-    } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to apply equalizer settings: $e',
-      );
-    }
-  }
-
+  
   Future<void> updateSongLrcPath(String songId, String lrcPath) async {
     try {
       await _dbHelper.updateSongLrcPath(songId, lrcPath);

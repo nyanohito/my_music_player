@@ -21,6 +21,7 @@ class NowPlayingScreen extends ConsumerStatefulWidget {
 class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   double _playbackSpeed = 1.0;
   double _pitch = 0.0;
+  double _volume = 1.0;
   Color _dominantColor = AppColors.background;
   final ScrollController _scrollController = ScrollController();
 
@@ -65,6 +66,30 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // 音量
+              Text(
+                '音量: ${(_volume * 100).toInt()}%',
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Slider(
+                value: _volume,
+                min: 0.0,
+                max: 1.0,
+                divisions: 20,
+                activeColor: AppColors.accent,
+                inactiveColor: AppColors.surfaceVariant,
+                onChanged: (value) {
+                  setState(() => _volume = value);
+                  ref.read(audioPlayerProvider.notifier).player.setVolume(value);
+                },
+              ),
+              const SizedBox(height: 24),
+              
               // 再生速度
               Text(
                 '再生速度: ${_playbackSpeed.toStringAsFixed(1)}x',
@@ -84,6 +109,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                 inactiveColor: AppColors.surfaceVariant,
                 onChanged: (value) {
                   setState(() => _playbackSpeed = value);
+                },
+                onChangeEnd: (value) {
                   ref.read(audioPlayerProvider.notifier).player.setSpeed(value);
                 },
               ),
@@ -108,6 +135,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                 inactiveColor: AppColors.surfaceVariant,
                 onChanged: (value) {
                   setState(() => _pitch = value);
+                },
+                onChangeEnd: (value) {
                   ref.read(audioPlayerProvider.notifier).player.setPitch(value);
                 },
               ),
@@ -277,7 +306,7 @@ void _showAudioRoutePicker(BuildContext context) async {
                       style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.tune, color: Colors.white, size: 24),
+                      icon: const Icon(Icons.settings, color: Colors.white, size: 24),
                       onPressed: () => _showAudioSettingsBottomSheet(context),
                       tooltip: 'Audio Settings',
                     ),

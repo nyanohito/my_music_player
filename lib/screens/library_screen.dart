@@ -13,7 +13,6 @@ import '../providers/audio_player_provider.dart';
 import 'now_playing_screen.dart';
 import 'playlist_detail_screen.dart';
 import 'play_history_screen.dart';
-import 'equalizer_screen.dart';
 import '../theme/app_theme.dart';
 import '../models/song.dart';
 import '../utils/database_helper.dart';
@@ -80,17 +79,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               );
             },
             tooltip: 'Play History',
-          ),
-          IconButton(
-            icon: const Icon(Icons.tune),
-            color: AppColors.textSecondary,
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const EqualizerScreen()),
-              );
-            },
-            tooltip: 'Equalizer',
           ),
           IconButton(
             icon: const Icon(Icons.lyrics_rounded),
