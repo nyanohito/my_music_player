@@ -22,11 +22,11 @@ class NowPlayingScreen extends ConsumerStatefulWidget {
 class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   double _playbackSpeed = 1.0;
   double _volume = 1.0;
-  Color _dominantColor = AppColors.background;
+  Color _dominantColor = const Color(0xFF81C784);
   final ScrollController _scrollController = ScrollController();
 
   Future<Color> _extractDominantColor(Uint8List? imageBytes) async {
-    if (imageBytes == null) return AppColors.background;
+    if (imageBytes == null) return const Color(0xFF81C784);
     
     try {
       final palette = await PaletteGenerator.fromImageProvider(
@@ -40,7 +40,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
       print('Failed to extract dominant color: $e');
     }
     
-    return AppColors.background;
+    return const Color(0xFF81C784);
   }
 
   int _getCurrentLyricIndex(List<LyricLine> lyrics, Duration position) {

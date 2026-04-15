@@ -128,7 +128,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     if (selected) setState(() => _filterMode = FilterMode.all);
                   },
                   backgroundColor: Colors.transparent,
-                  selectedColor: AppColors.accent,
+                  selectedColor: const Color(0xFF1DB954),
                   labelStyle: TextStyle(
                     color: _filterMode == FilterMode.all ? Colors.black : Colors.white,
                     fontWeight: FontWeight.w600,
@@ -145,7 +145,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     if (selected) setState(() => _filterMode = FilterMode.favorites);
                   },
                   backgroundColor: Colors.transparent,
-                  selectedColor: AppColors.accent,
+                  selectedColor: const Color(0xFF1DB954),
                   labelStyle: TextStyle(
                     color: _filterMode == FilterMode.favorites ? Colors.black : Colors.white,
                     fontWeight: FontWeight.w600,
@@ -162,7 +162,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     if (selected) setState(() => _filterMode = FilterMode.playlists);
                   },
                   backgroundColor: Colors.transparent,
-                  selectedColor: AppColors.accent,
+                  selectedColor: const Color(0xFF1DB954),
                   labelStyle: TextStyle(
                     color: _filterMode == FilterMode.playlists ? Colors.black : Colors.white,
                     fontWeight: FontWeight.w600,

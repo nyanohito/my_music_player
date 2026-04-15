@@ -30,7 +30,7 @@ class MiniPlayerWithProgress extends StatefulWidget {
 }
 
 class _MiniPlayerWithProgressState extends State<MiniPlayerWithProgress> {
-  Color _dominantColor = AppColors.surfaceVariant;
+  Color _dominantColor = const Color(0xFF81C784);
 
   @override
   void initState() {
@@ -54,7 +54,7 @@ class _MiniPlayerWithProgressState extends State<MiniPlayerWithProgress> {
         );
         if (mounted) {
           setState(() {
-            _dominantColor = palette.dominantColor?.color ?? AppColors.surfaceVariant;
+            _domininantColor = palette.dominantColor?.color ?? const Color(0xFF81C784);
           });
         }
       } catch (e) {
@@ -62,7 +62,7 @@ class _MiniPlayerWithProgressState extends State<MiniPlayerWithProgress> {
       }
     } else {
       setState(() {
-        _dominantColor = AppColors.surfaceVariant;
+        _dominantColor = const Color(0xFF81C784);
       });
     }
   }
