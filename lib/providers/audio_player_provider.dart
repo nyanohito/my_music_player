@@ -59,7 +59,6 @@ class AudioPlayerState {
   final PlaylistMode repeatMode;
   final List<Map<String, dynamic>> playlists;
   final double playbackSpeed;
-  final double pitch;
 
   const AudioPlayerState({
     this.playlist = const [],
@@ -74,7 +73,6 @@ class AudioPlayerState {
     this.repeatMode = PlaylistMode.off,
     this.playlists = const [],
     this.playbackSpeed = 1.0,
-    this.pitch = 0.0,
   });
 
   AudioPlayerState copyWith({
@@ -91,7 +89,6 @@ class AudioPlayerState {
     PlaylistMode? repeatMode,
     List<Map<String, dynamic>>? playlists,
     double? playbackSpeed,
-    double? pitch,
   }) {
     return AudioPlayerState(
       playlist: playlist ?? this.playlist,
@@ -106,7 +103,6 @@ class AudioPlayerState {
       repeatMode: repeatMode ?? this.repeatMode,
       playlists: playlists ?? this.playlists,
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
-      pitch: pitch ?? this.pitch,
     );
   }
 
@@ -138,15 +134,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  Future<void> setPitch(double pitch) async {
-    try {
-      await _player.setPitch(pitch);
-      state = state.copyWith(pitch: pitch);
-    } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to set pitch: $e');
-    }
-  }
-  
+    
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
   StreamSubscription<Duration>? _positionSubscription;
@@ -201,9 +189,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }).toList();
         final playlist = ConcatenatingAudioSource(children: audioSources);
         await _player.setAudioSource(playlist, initialIndex: 0);
-        
-        // Initialize pitch after setting audio source to ensure pitch changes work
-        await _player.setPitch(state.pitch);
       }
     } catch (e) {
       print('Failed to load saved songs: $e');
@@ -217,19 +202,29 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   void _subscribeToPlayerStreams() {
     _positionSubscription = _player.positionStream.listen((position) {
+      // Ensure position doesn't exceed duration
+      final safePosition = state.duration != null && position > state.duration! 
+          ? state.duration! 
+          : position;
+      
       final lyricIndex = _getCurrentLyricIndex(
         state.currentSong?.lyrics ?? [],
-        position,
+        safePosition,
       );
       state = state.copyWith(
-        position: position,
+        position: safePosition,
         currentLyricIndex: lyricIndex,
       );
     });
 
     _durationSubscription = _player.durationStream.listen((duration) {
       if (duration != null) {
-        state = state.copyWith(duration: duration);
+        // Ensure current position is within new duration bounds
+        final safePosition = state.position > duration ? duration : state.position;
+        state = state.copyWith(
+          duration: duration,
+          position: safePosition,
+        );
       }
     });
 

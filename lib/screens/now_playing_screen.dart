@@ -21,7 +21,6 @@ class NowPlayingScreen extends ConsumerStatefulWidget {
 
 class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   double _playbackSpeed = 1.0;
-  double _pitch = 0.0;
   double _volume = 1.0;
   Color _dominantColor = AppColors.background;
   final ScrollController _scrollController = ScrollController();
@@ -93,34 +92,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
               ),
               const SizedBox(height: 24),
               
-              // ピッチ（キー）
-              Text(
-                'ピッチ: ${_pitch.toStringAsFixed(1)}',
-                style: const TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Slider(
-                value: _pitch,
-                min: -6.0,
-                max: 6.0,
-                divisions: 12,
-                activeColor: AppColors.accent,
-                inactiveColor: AppColors.surfaceVariant,
-                onChanged: (value) {
-                  setState(() => _pitch = value);
-                },
-                onChangeEnd: (value) {
-                  // Convert semitones to pitch multiplier
-                  final double pitchMultiplier = pow(2.0, value / 12.0) as double;
-                  ref.read(audioPlayerProvider.notifier).player.setPitch(pitchMultiplier);
-                },
-              ),
-              const SizedBox(height: 24),
-              
+                            
               // 閉じるボタン
               SizedBox(
                 width: double.infinity,
@@ -162,9 +134,9 @@ void _showLyricsFullScreen(BuildContext context) {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              const Color(0xFF81C784).withValues(alpha: 0.9),
-              const Color(0xFF4A7C59).withValues(alpha: 0.7),
-              const Color(0xFF2D4A2B).withValues(alpha: 0.95),
+              const Color(0xFF81C784),
+              const Color(0xFF4A7C59),
+              const Color(0xFF2D4A2B),
             ],
             stops: const [0.0, 0.6, 1.0],
           ),
