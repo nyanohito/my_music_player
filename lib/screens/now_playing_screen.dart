@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
@@ -137,7 +138,9 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                   setState(() => _pitch = value);
                 },
                 onChangeEnd: (value) {
-                  ref.read(audioPlayerProvider.notifier).player.setPitch(value);
+                  // Convert semitones to pitch multiplier
+                  final double pitchMultiplier = pow(2.0, value / 12.0) as double;
+                  ref.read(audioPlayerProvider.notifier).player.setPitch(pitchMultiplier);
                 },
               ),
               const SizedBox(height: 24),
