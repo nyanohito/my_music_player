@@ -84,7 +84,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                 inactiveColor: AppColors.surfaceVariant,
                 onChanged: (value) {
                   setState(() => _playbackSpeed = value);
-                  ref.read(audioPlayerProvider.notifier).setPlaybackSpeed(value);
+                  ref.read(audioPlayerProvider.notifier).player.setSpeed(value);
                 },
               ),
               const SizedBox(height: 24),
@@ -108,7 +108,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                 inactiveColor: AppColors.surfaceVariant,
                 onChanged: (value) {
                   setState(() => _pitch = value);
-                  ref.read(audioPlayerProvider.notifier).setPitch(value);
+                  ref.read(audioPlayerProvider.notifier).player.setPitch(value);
                 },
               ),
               const SizedBox(height: 24),

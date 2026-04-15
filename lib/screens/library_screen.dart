@@ -253,8 +253,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               child: GestureDetector(
                 onTap: () => _openNowPlaying(context),
                 onVerticalDragEnd: (details) {
-                  // Check if user swiped up (negative velocity)
-                  if (details.primaryVelocity! < 0) {
+                  if (details.primaryVelocity != null && details.primaryVelocity! < 0) {
                     _openNowPlaying(context);
                   }
                 },
