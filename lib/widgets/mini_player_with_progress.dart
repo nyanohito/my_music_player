@@ -54,7 +54,7 @@ class _MiniPlayerWithProgressState extends State<MiniPlayerWithProgress> {
         );
         if (mounted) {
           setState(() {
-            _domininantColor = palette.dominantColor?.color ?? const Color(0xFF81C784);
+            _dominantColor = palette.dominantColor?.color ?? const Color(0xFF81C784);
           });
         }
       } catch (e) {
