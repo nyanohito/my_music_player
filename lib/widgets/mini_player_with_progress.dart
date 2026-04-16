@@ -143,7 +143,7 @@ class _MiniPlayerWithProgressState extends State<MiniPlayerWithProgress> {
                       const SizedBox(height: 4),
                       // Artist name
                       Text(
-                        widget.currentSong?.artist ?? 'Unknown Artist',
+                        widget.currentSong?.artist ?? 'Mrs. GREEN APPLE',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.7),
                           fontWeight: FontWeight.w500,

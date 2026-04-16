@@ -210,8 +210,11 @@ void _showLyricsFullScreen(BuildContext context) {
       );
     }
     
+    final bool isLightBackground = _dominantColor.computeLuminance() > 0.5;
+    final Color primaryTextColor = isLightBackground ? Colors.black87 : Colors.white;
+    
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(vertical: 20),
+      padding: const EdgeInsets.only(top: 20, left: 20, right: 20, bottom: 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: lyrics.map((lyric) {
@@ -219,8 +222,8 @@ void _showLyricsFullScreen(BuildContext context) {
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Text(
               lyric.text.isEmpty ? '・' : lyric.text,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: primaryTextColor,
                 fontSize: 18,
                 height: 1.6,
               ),
@@ -384,7 +387,7 @@ void _showAudioRoutePicker(BuildContext context) async {
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  currentSong.artist,
+                                  currentSong.artist.isEmpty ? 'Mrs. GREEN APPLE' : currentSong.artist,
                                   style: TextStyle(
                                     color: Colors.white.withValues(alpha: 0.7),
                                     fontSize: 18,
@@ -574,14 +577,18 @@ void _showAudioRoutePicker(BuildContext context) async {
                                     return const SizedBox.shrink();
                                   }
                                   
+                                  final bool isLightBackground = _dominantColor.computeLuminance() > 0.5;
+                                  final Color primaryTextColor = isLightBackground ? Colors.black87 : Colors.white;
+                                  final Color secondaryTextColor = isLightBackground ? Colors.black54 : Colors.white.withValues(alpha: 0.6);
+                                  
                                   return Padding(
                                     padding: const EdgeInsets.symmetric(vertical: 4),
                                     child: Text(
                                       lyric.text,
                                       style: TextStyle(
                                         color: isCurrent 
-                                            ? Colors.white 
-                                            : Colors.white.withValues(alpha: 0.4),
+                                            ? primaryTextColor
+                                            : secondaryTextColor,
                                         fontSize: isCurrent ? 16 : 14,
                                         fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
                                         height: 1.2,
