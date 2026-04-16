@@ -172,10 +172,14 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final extension = p.extension(localPath);
       final uniqueFileName = '${nameWithoutExt}_$timestamp$extension';
       final uniquePath = p.join(appDir.path, uniqueFileName);
-      await sourceFile.copy(uniquePath);
+      // ★ Fix 1: iCloud権限エラー対策 — File.copy()ではなくバイナリ読み書きで強制コピー
+      final bytes = await File(sourcePath).readAsBytes();
+      await File(uniquePath).writeAsBytes(bytes);
       return uniqueFileName; // Return filename only
     } else {
-      await sourceFile.copy(localPath);
+      // ★ Fix 1: iCloud権限エラー対策 — File.copy()ではなくバイナリ読み書きで強制コピー
+      final bytes = await File(sourcePath).readAsBytes();
+      await File(localPath).writeAsBytes(bytes);
       return fileName; // Return filename only
     }
   }
@@ -218,6 +222,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         final audioSources = <AudioSource>[];
         for (final song in songsWithArtwork) {
           final fullPath = await _getFullPath(song.filePath);
+          // ★ Fix 3: ファイルが存在しない場合はAudioSourceに追加しない（0:00空プレイヤー防止）
+          if (!File(fullPath).existsSync()) {
+            print('[AudioPlayer] Skipping missing file: $fullPath');
+            continue;
+          }
           if (Platform.isAndroid || Platform.isIOS) {
             String? artUri;
             if (song.albumArt != null) {
@@ -362,6 +371,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         final albumArt = await _extractAlbumArt(fullPath);
         if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
         
+        // ★ Fix 2: DB保存直前に絶対パスを物理ブロック — ファイル名のみに強制クレンジング
+        song = song.copyWith(
+          filePath: song.filePath.split('/').last,
+          lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
+        );
         await _dbHelper.insertOrUpdateSong(song);
         newSongs.add(song);
       }
@@ -502,19 +516,31 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }
         
         if (audioFile != null && audioFile.path != null) {
-          var song = await _createSongFromMetadata(audioFile.path!);
+          // ★ Fix 1適用: コピー先フルパスでメタデータ抽出・アートワーク抽出
+          final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
+          final audioFullPath = await _getFullPath(audioFileName);
           
-          final albumArt = await _extractAlbumArt(audioFile.path!);
+          var song = await _createSongFromMetadata(audioFullPath);
+          
+          final albumArt = await _extractAlbumArt(audioFullPath);
           if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
           
           if (lrcFile != null && lrcFile.path != null) {
-            final lyrics = await _parseLrcFile(lrcFile.path!);
+            // ★ Fix 1適用: LRCもバイナリコピーしてローカルに保存
+            final lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
+            final lrcFullPath = await _getFullPath(lrcFileName);
+            final lyrics = await _parseLrcFile(lrcFullPath);
             song = song.copyWith(
-              lrcPath: lrcFile.path!,
+              lrcPath: lrcFileName, // ★ Fix 2: コピー済みファイル名のみを設定
               lyrics: lyrics,
             );
           }
           
+          // ★ Fix 2: DB保存直前に絶対パスを物理ブロック — ファイル名のみに強制クレンジング
+          song = song.copyWith(
+            filePath: song.filePath.split('/').last,
+            lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
+          );
           await _dbHelper.insertOrUpdateSong(song);
           newSongs.add(song);
         }
