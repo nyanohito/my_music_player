@@ -399,7 +399,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           : LocalFileStreamAudioSource(fullPath);
       newAudioSources.add(audioSource);
     }
-    await _player.concat(newAudioSources);
+    
+    // Get current audio source and add new songs without stopping playback
+    final currentAudioSource = _player.audioSource;
+    if (currentAudioSource is ConcatenatingAudioSource) {
+      await currentAudioSource.addAll(newAudioSources);
+    }
   }
 
   Future<void> pickAndLoadLrc() async {
