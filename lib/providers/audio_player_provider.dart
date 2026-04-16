@@ -128,8 +128,21 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   Future<void> setPlaybackSpeed(double speed) async {
     try {
-      await _player.setSpeed(speed);
-      state = state.copyWith(playbackSpeed: speed);
+      // For iOS, limit speed range to prevent audio distortion
+      final safeSpeed = Platform.isIOS 
+          ? speed.clamp(0.5, 1.5) // Conservative range for iOS
+          : speed.clamp(0.5, 2.0); // Full range for Android
+      
+      // Disable pitch compensation on iOS to prevent stuttering
+      if (Platform.isIOS) {
+        await _player.setSpeed(safeSpeed);
+        // Ensure pitch is not changed when adjusting speed on iOS
+        await _player.setPitch(1.0);
+      } else {
+        await _player.setSpeed(safeSpeed);
+      }
+      
+      state = state.copyWith(playbackSpeed: safeSpeed);
     } catch (e) {
       state = state.copyWith(errorMessage: 'Failed to set playback speed: $e');
     }
@@ -140,7 +153,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   StreamSubscription<Duration>? _positionSubscription;
 
-  /// Copy file to app's local directory and return the new path
+  /// Copy file to app's local directory and return the filename only
   Future<String> _copyFileToLocalDirectory(String sourcePath) async {
     final sourceFile = File(sourcePath);
     if (!await sourceFile.exists()) {
@@ -157,13 +170,20 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final nameWithoutExt = p.basenameWithoutExtension(localPath);
       final extension = p.extension(localPath);
-      final uniquePath = p.join(appDir.path, '${nameWithoutExt}_$timestamp$extension');
+      final uniqueFileName = '${nameWithoutExt}_$timestamp$extension';
+      final uniquePath = p.join(appDir.path, uniqueFileName);
       await sourceFile.copy(uniquePath);
-      return uniquePath;
+      return uniqueFileName; // Return filename only
     } else {
       await sourceFile.copy(localPath);
-      return localPath;
+      return fileName; // Return filename only
     }
+  }
+
+  /// Get full absolute path from filename
+  Future<String> _getFullPath(String fileName) async {
+    final appDir = await getApplicationDocumentsDirectory();
+    return p.join(appDir.path, fileName);
   }
   StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
@@ -185,7 +205,8 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       
       if (savedSongs.isNotEmpty) {
         final songsWithArtwork = await Future.wait(savedSongs.map((song) async {
-          final albumArt = await _extractAlbumArt(song.filePath);
+          final fullPath = await _getFullPath(song.filePath);
+          final albumArt = await _extractAlbumArt(fullPath);
           return albumArt != null ? song.copyWithAlbumArt(albumArt) : song;
         }));
         
@@ -194,15 +215,17 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           playlists: playlists,
         );
         
-        final audioSources = songsWithArtwork.map((song) {
+        final audioSources = <AudioSource>[];
+        for (final song in songsWithArtwork) {
+          final fullPath = await _getFullPath(song.filePath);
           if (Platform.isAndroid || Platform.isIOS) {
             String? artUri;
             if (song.albumArt != null) {
               artUri = Uri.dataFromBytes(song.albumArt!).toString();
             }
             
-            return AudioSource.uri(
-              Uri.file(song.filePath), 
+            final audioSource = AudioSource.uri(
+              Uri.file(fullPath), 
               tag: MediaItem(
                 id: song.id, 
                 title: song.title, 
@@ -210,10 +233,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
                 artUri: artUri != null ? Uri.parse(artUri) : null,
               ),
             );
+            audioSources.add(audioSource);
           } else {
-            return LocalFileStreamAudioSource(song.filePath);
+            audioSources.add(LocalFileStreamAudioSource(fullPath));
           }
-        }).toList();
+        }
         final playlist = ConcatenatingAudioSource(children: audioSources);
         await _player.setAudioSource(playlist, initialIndex: 0);
       }
@@ -289,22 +313,24 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  // ✅ metadata_god に合わせた情報抽出ロジック
-  Future<Song> _createSongFromMetadata(String filePath) async {
+  //  metadata_god  metadata extraction logic
+  Future<Song> _createSongFromMetadata(String absolutePath) async {
     try {
-      final metadata = await MetadataGod.readMetadata(file: filePath);
+      final metadata = await MetadataGod.readMetadata(file: absolutePath);
       
-      final String title = p.basenameWithoutExtension(filePath);
+      final String title = p.basenameWithoutExtension(absolutePath);
       final String artist = metadata.artist ?? 'Unknown Artist';
+      final String fileName = p.basename(absolutePath); // Extract filename only
 
       return Song(
         id: const Uuid().v4(),
         title: title,
         artist: artist,
-        filePath: filePath,
+        filePath: fileName, // Save only filename
       );
     } catch (e) {
-      return Song.fromPath(filePath);
+      final String fileName = p.basename(absolutePath); // Extract filename only
+      return Song.fromPath(fileName); // Save only filename
     }
   }
 
@@ -324,10 +350,14 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         if (file.path == null) continue;
         
         // Copy file to local directory first
-        final localPath = await _copyFileToLocalDirectory(file.path!);
-        var song = await _createSongFromMetadata(localPath);
+        final fileName = await _copyFileToLocalDirectory(file.path!);
+        final fullPath = await _getFullPath(fileName);
         
-        final albumArt = await _extractAlbumArt(localPath);
+        // Use absolute path for metadata extraction
+        var song = await _createSongFromMetadata(fullPath);
+        
+        // Extract album art using absolute path
+        final albumArt = await _extractAlbumArt(fullPath);
         if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
         
         await _dbHelper.insertOrUpdateSong(song);
@@ -339,11 +369,14 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(playlist: allSongs);
 
       if (_player.audioSource == null) {
-        final audioSources = allSongs.map((song) {
-          return (Platform.isAndroid || Platform.isIOS)
-              ? AudioSource.uri(Uri.file(song.filePath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist))
-              : LocalFileStreamAudioSource(song.filePath);
-        }).toList();
+        final audioSources = <AudioSource>[];
+        for (final song in allSongs) {
+          final fullPath = await _getFullPath(song.filePath);
+          final audioSource = (Platform.isAndroid || Platform.isIOS)
+              ? AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist))
+              : LocalFileStreamAudioSource(fullPath);
+          audioSources.add(audioSource);
+        }
         final playlist = ConcatenatingAudioSource(children: audioSources);
         await _player.setAudioSource(playlist, initialIndex: previousLength);
         _player.play(); 
@@ -358,14 +391,15 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   }
   
   Future<void> _appendSongsToCurrentPlaylist(List<Song> newSongs) async {
-    final newAudioSources = newSongs.map((song) {
-      return (Platform.isAndroid || Platform.isIOS)
-          ? AudioSource.uri(Uri.file(song.filePath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist))
-          : LocalFileStreamAudioSource(song.filePath);
-    }).toList();
-
-    final playlist = _player.audioSource as ConcatenatingAudioSource;
-    await playlist.addAll(newAudioSources);
+    final newAudioSources = <AudioSource>[];
+    for (final song in newSongs) {
+      final fullPath = await _getFullPath(song.filePath);
+      final audioSource = (Platform.isAndroid || Platform.isIOS)
+          ? AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist))
+          : LocalFileStreamAudioSource(fullPath);
+      newAudioSources.add(audioSource);
+    }
+    await _player.concat(newAudioSources);
   }
 
   Future<void> pickAndLoadLrc() async {
@@ -788,15 +822,19 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   Future<void> updateSongLrcPath(String songId, String lrcPath) async {
     try {
       // Copy LRC file to local directory first
-      final localLrcPath = await _copyFileToLocalDirectory(lrcPath);
+      final lrcFileName = await _copyFileToLocalDirectory(lrcPath);
+      final fullLrcPath = await _getFullPath(lrcFileName);
       
-      await _dbHelper.updateSongLrcPath(songId, localLrcPath);
-      final lyrics = await _parseLrcFile(localLrcPath);
+      // Use absolute path for parsing lyrics
+      final lyrics = await _parseLrcFile(fullLrcPath);
+      
+      // Save only filename to database
+      await _dbHelper.updateSongLrcPath(songId, lrcFileName);
       
       final updatedPlaylist = state.playlist.map<Song>((song) {
         if (song.id == songId) {
           return song.copyWith(
-            lrcPath: localLrcPath,
+            lrcPath: lrcFileName, // Save only filename
             lyrics: lyrics,
           );
         }

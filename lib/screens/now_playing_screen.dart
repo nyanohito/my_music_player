@@ -200,16 +200,9 @@ void _showLyricsFullScreen(BuildContext context) {
     final playerState = ref.read(audioPlayerProvider);
     final lyrics = playerState.currentSong?.lyrics ?? [];
     
-    if (lyrics.isEmpty) {
-      return Center(
-        child: Text(
-          '歌詞がありません',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.7),
-            fontSize: 18,
-          ),
-        ),
-      );
+    // Check if lyrics data exists and is not empty
+    if (lyrics == null || lyrics.isEmpty) {
+      return const SizedBox.shrink(); // Hide completely if no lyrics
     }
     
     final bool isLightBackground = _dominantColor.computeLuminance() > 0.5;
@@ -518,8 +511,8 @@ void _showAudioRoutePicker(BuildContext context) async {
                 ),
               ),
               
-              // Lyrics Preview Card
-              if (currentSong.lyrics.isNotEmpty)
+              // Lyrics Preview Card - Only show if lyrics data exists and is not empty
+              if (currentSong.lyrics != null && currentSong.lyrics.isNotEmpty)
                 GestureDetector(
                   onTap: () => _showLyricsFullScreen(context),
                   child: Container(
