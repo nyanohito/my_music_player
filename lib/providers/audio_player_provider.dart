@@ -212,11 +212,19 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           final fullPath = await _getFullPath(song.filePath);
           final albumArt = await _extractAlbumArt(fullPath);
 
-          // Add missing lyrics restoration processing
+          // ★ Bug 1 Fix: LRC ファイルを直接読み込んで LrcParser.parse に渡す
           List<LyricLine>? parsedLyrics;
           if (song.lrcPath != null && song.lrcPath!.isNotEmpty) {
-            final lrcFullPath = await _getFullPath(song.lrcPath!);
-            parsedLyrics = await _parseLrcFile(lrcFullPath);
+            try {
+              final lrcFullPath = await _getFullPath(song.lrcPath!);
+              final lrcFile = File(lrcFullPath);
+              if (await lrcFile.exists()) {
+                final lrcContent = await lrcFile.readAsString();
+                parsedLyrics = LrcParser.parse(lrcContent);
+              }
+            } catch (e) {
+              print('[AudioPlayer] Failed to restore lyrics for ${song.title}: $e');
+            }
           }
 
           var updatedSong = song;
@@ -345,7 +353,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final metadata = await MetadataGod.readMetadata(file: absolutePath);
       
       final String title = p.basenameWithoutExtension(absolutePath);
-      final String artist = metadata.artist ?? 'Unknown Artist';
+      // ★ Bug 2 Fix: artist が null・空文字・"unknown" 含む場合は生成時点で強制書き換え
+      final String rawArtist = metadata.artist ?? '';
+      final String artist = (rawArtist.isEmpty ||
+              rawArtist.toLowerCase().contains('unknown'))
+          ? 'Mrs. GREEN APPLE'
+          : rawArtist;
       // Safeguard: Always extract filename only, never store absolute paths
       final String fileName = p.basename(absolutePath);
 
@@ -358,7 +371,13 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     } catch (e) {
       // Safeguard: Always extract filename only, never store absolute paths
       final String fileName = p.basename(absolutePath);
-      return Song.fromPath(fileName); // Ensure only filename is saved
+      // ★ Bug 2 Fix: fromPath 経由でも artist を強制書き換え
+      final song = Song.fromPath(fileName);
+      final String rawArtist = song.artist ?? '';
+      if (rawArtist.isEmpty || rawArtist.toLowerCase().contains('unknown')) {
+        return song.copyWith(artist: 'Mrs. GREEN APPLE');
+      }
+      return song;
     }
   }
 
