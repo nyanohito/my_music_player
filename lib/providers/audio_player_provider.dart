@@ -206,74 +206,78 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     try {
       final savedSongs = await _dbHelper.getAllSongs();
       final playlists = await _dbHelper.getAllPlaylists();
-      
-      if (savedSongs.isNotEmpty) {
-        final songsWithArtwork = await Future.wait(savedSongs.map((song) async {
-          final fullPath = await _getFullPath(song.filePath);
-          final albumArt = await _extractAlbumArt(fullPath);
 
-          // ★ Bug 1 Fix: LRC ファイルを直接読み込んで LrcParser.parse に渡す
-          List<LyricLine>? parsedLyrics;
-          if (song.lrcPath != null && song.lrcPath!.isNotEmpty) {
-            try {
-              final lrcFullPath = await _getFullPath(song.lrcPath!);
-              final lrcFile = File(lrcFullPath);
-              if (await lrcFile.exists()) {
-                final lrcContent = await lrcFile.readAsString();
-                parsedLyrics = LrcParser.parse(lrcContent);
-              }
-            } catch (e) {
-              print('[AudioPlayer] Failed to restore lyrics for ${song.title}: $e');
-            }
-          }
+      // ★ 根本修正: state.playlist と ConcatenatingAudioSource を
+      //   「常に同じ曲・同じ順序」で構築する。
+      //   旧実装は state.playlist に全曲を入れた後で audioSources だけ欠損スキップ
+      //   していたためインデックスがずれ「追加直後 0:00/0:00」を引き起こしていた。
+      final List<Song> validSongs = [];
+      final List<AudioSource> audioSources = [];
 
-          var updatedSong = song;
-          if (albumArt != null) {
-            updatedSong = updatedSong.copyWithAlbumArt(albumArt);
-          }
-          if (parsedLyrics != null && parsedLyrics.isNotEmpty) {
-            updatedSong = updatedSong.copyWith(
-              lyrics: parsedLyrics,
-            );
-          }
-          return updatedSong;
-        }));
-        
-        state = state.copyWith(
-          playlist: songsWithArtwork,
-          playlists: playlists,
-        );
-        
-        final audioSources = <AudioSource>[];
-        for (final song in songsWithArtwork) {
-          final fullPath = await _getFullPath(song.filePath);
-          // ★ Fix 3: ファイルが存在しない場合はAudioSourceに追加しない（0:00空プレイヤー防止）
-          if (!File(fullPath).existsSync()) {
-            print('[AudioPlayer] Skipping missing file: $fullPath');
-            continue;
-          }
-          if (Platform.isAndroid || Platform.isIOS) {
-            String? artUri;
-            if (song.albumArt != null) {
-              artUri = Uri.dataFromBytes(song.albumArt!).toString();
+      for (final song in savedSongs) {
+        final fullPath = await _getFullPath(song.filePath);
+
+        // ファイルが存在しない曲は playlist にも AudioSource にも追加しない
+        if (!await File(fullPath).exists()) {
+          print('[AudioPlayer] File not found, skipping from playlist: $fullPath');
+          continue;
+        }
+
+        // アルバムアート抽出
+        final albumArt = await _extractAlbumArt(fullPath);
+
+        // ★ Bug 1 Fix: LRC を readAsString → LrcParser.parse で確実に復元
+        List<LyricLine>? parsedLyrics;
+        if (song.lrcPath != null && song.lrcPath!.isNotEmpty) {
+          try {
+            final lrcFullPath = await _getFullPath(song.lrcPath!);
+            final lrcFile = File(lrcFullPath);
+            if (await lrcFile.exists()) {
+              final lrcContent = await lrcFile.readAsString();
+              parsedLyrics = LrcParser.parse(lrcContent);
             }
-            
-            final audioSource = AudioSource.uri(
-              Uri.file(fullPath), 
-              tag: MediaItem(
-                id: song.id, 
-                title: song.title, 
-                artist: song.artist,
-                artUri: artUri != null ? Uri.parse(artUri) : null,
-              ),
-            );
-            audioSources.add(audioSource);
-          } else {
-            audioSources.add(LocalFileStreamAudioSource(fullPath));
+          } catch (e) {
+            print('[AudioPlayer] Failed to restore lyrics for ${song.title}: $e');
           }
         }
+
+        var updatedSong = song;
+        if (albumArt != null) updatedSong = updatedSong.copyWithAlbumArt(albumArt);
+        if (parsedLyrics != null && parsedLyrics.isNotEmpty) {
+          updatedSong = updatedSong.copyWith(lyrics: parsedLyrics);
+        }
+
+        // state.playlist と audioSources に同時・同順で追加する
+        validSongs.add(updatedSong);
+
+        if (Platform.isAndroid || Platform.isIOS) {
+          String? artUri;
+          if (updatedSong.albumArt != null) {
+            artUri = Uri.dataFromBytes(updatedSong.albumArt!).toString();
+          }
+          audioSources.add(AudioSource.uri(
+            Uri.file(fullPath),
+            tag: MediaItem(
+              id: updatedSong.id,
+              title: updatedSong.title,
+              artist: updatedSong.artist,
+              artUri: artUri != null ? Uri.parse(artUri) : null,
+            ),
+          ));
+        } else {
+          audioSources.add(LocalFileStreamAudioSource(fullPath));
+        }
+      }
+
+      // playlist と AudioSource を同時に確定（順序保証）
+      state = state.copyWith(
+        playlist: validSongs,
+        playlists: playlists,
+      );
+
+      if (audioSources.isNotEmpty) {
         final playlist = ConcatenatingAudioSource(children: audioSources);
-        await _player.setAudioSource(playlist, initialIndex: 0);
+        await _player.setAudioSource(playlist, initialPosition: Duration.zero, preload: false);
       }
     } catch (e) {
       print('Failed to load saved songs: $e');
@@ -474,26 +478,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final lrcPath = result.files.single.path;
       if (lrcPath == null) return;
 
-      final lrcContent = await File(lrcPath).readAsString();
-      final lyrics = LrcParser.parse(lrcContent);
-
-      final currentSong = state.currentSong!;
-      final updatedSong = currentSong.copyWithLyrics(
-        lrcPath: lrcPath,
-        lyrics: lyrics,
-      );
-
-      final updatedPlaylist = List<Song>.from(state.playlist);
-      updatedPlaylist[state.currentSongIndex] = updatedSong;
-
-      state = state.copyWith(
-        playlist: updatedPlaylist,
-        currentLyricIndex: -1, 
-      );
+      // ★ Bug Fix: 旧実装は元のパスをメモリにだけ読み込み DB を更新しないため
+      //   再起動で歌詞が消えていた。updateSongLrcPath 経由で
+      //   ① アプリローカルにコピー ② DB 更新 ③ state 更新 を確実に行う。
+      await updateSongLrcPath(state.currentSong!.id, lrcPath);
     } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to load lyrics: $e',
-      );
+      state = state.copyWith(errorMessage: 'Failed to load lyrics: $e');
     }
   }
 
@@ -587,26 +577,28 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(playlist: allSongs);
 
       if (_player.audioSource == null) {
-        final audioSources = allSongs.map((song) {
+        // ★ Bug Fix: map() は async 非対応なので for ループで _getFullPath を使う
+        final audioSources = <AudioSource>[];
+        for (final song in allSongs) {
+          final fullPath = await _getFullPath(song.filePath);
           if (Platform.isAndroid || Platform.isIOS) {
             String? artUri;
             if (song.albumArt != null) {
               artUri = Uri.dataFromBytes(song.albumArt!).toString();
             }
-            
-            return AudioSource.uri(
-              Uri.file(song.filePath), 
+            audioSources.add(AudioSource.uri(
+              Uri.file(fullPath),
               tag: MediaItem(
-                id: song.id, 
-                title: song.title, 
+                id: song.id,
+                title: song.title,
                 artist: song.artist,
                 artUri: artUri != null ? Uri.parse(artUri) : null,
               ),
-            );
+            ));
           } else {
-            return LocalFileStreamAudioSource(song.filePath);
+            audioSources.add(LocalFileStreamAudioSource(fullPath));
           }
-        }).toList();
+        }
         final playlist = ConcatenatingAudioSource(children: audioSources);
         await _player.setAudioSource(playlist, initialIndex: previousLength);
         _player.play(); 
@@ -833,16 +825,19 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final List<AudioSource> audioSources = [];
       
       for (final song in playlist) {
+        // ★ Bug Fix: 旧実装は song.filePath（ファイル名のみ）を直接渡していた。
+        //   _getFullPath で絶対パスに変換してから AudioSource を生成する。
+        final fullPath = await _getFullPath(song.filePath);
         final audioSource = (Platform.isAndroid || Platform.isIOS)
             ? AudioSource.uri(
-                Uri.file(song.filePath),
+                Uri.file(fullPath),
                 tag: MediaItem(
                   id: song.id,
                   title: song.title,
                   artist: song.artist,
                 ),
               )
-            : LocalFileStreamAudioSource(song.filePath); 
+            : LocalFileStreamAudioSource(fullPath);
         
         audioSources.add(audioSource);
       }
