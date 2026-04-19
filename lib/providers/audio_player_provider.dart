@@ -173,11 +173,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final uniqueFileName = '${nameWithoutExt}_$timestamp$extension';
       final uniquePath = p.join(appDir.path, uniqueFileName);
       // 
-      await File(sourcePath).openRead().pipe(File(uniquePath).openWrite());
+      await File(sourcePath).copy(uniquePath);
       return uniqueFileName; // Return filename only
     } else {
       // 
-      await File(sourcePath).openRead().pipe(File(localPath).openWrite());
+      await File(sourcePath).copy(localPath);
       return fileName; // Return filename only
     }
   }
@@ -386,42 +386,112 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   Future<void> pickAndLoadSong() async {
     try {
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['mp3', 'flac', 'm4a', 'wav', 'aac'],
         allowMultiple: true,
+        type: FileType.custom,
+        allowedExtensions: [
+          // 
+          'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac',
+          'aiff', 'aif',
+          // 
+          'lrc',
+        ],
       );
       if (result == null || result.files.isEmpty) return;
 
       state = state.copyWith(isLoading: true);
       final List<Song> newSongs = [];
 
+      // 
+      final Map<String, List<PlatformFile>> groups = {};
+
       for (final file in result.files) {
         if (file.path == null) continue;
-        
-        // Copy file to local directory first
-        final fileName = await _copyFileToLocalDirectory(file.path!);
-        final fullPath = await _getFullPath(fileName);
-        
-        // Use absolute path for metadata extraction
-        var song = await _createSongFromMetadata(fullPath);
-        
-        // Extract album art using absolute path
-        final albumArt = await _extractAlbumArt(fullPath);
-        if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
-        
-        // ★ Fix 2: DB保存直前に絶対パスを物理ブロック — ファイル名のみに強制クレンジング
-        song = song.copyWith(
-          filePath: song.filePath.split('/').last,
-          lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
-        );
-        await _dbHelper.insertOrUpdateSong(song);
-        newSongs.add(song);
+        final key = p.basenameWithoutExtension(file.path!).toLowerCase();
+        groups.putIfAbsent(key, () => []).add(file);
       }
 
+      // 
+      const audioExtensions = {
+        'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac',
+        'aiff', 'aif',
+      };
+
+      // 
+      for (final entry in groups.entries) {
+        try {
+          final files = entry.value;
+
+          // 
+          PlatformFile? audioFile;
+          PlatformFile? lrcFile;
+
+          for (final f in files) {
+            final ext = p.extension(f.path!).replaceFirst('.', '').toLowerCase();
+            if (ext == 'lrc') {
+              lrcFile = f;
+            } else if (audioExtensions.contains(ext)) {
+              audioFile = f;
+            }
+          }
+
+          // 
+          if (audioFile == null || audioFile.path == null) continue;
+
+          // 
+          final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
+          final audioFullPath = await _getFullPath(audioFileName);
+          
+          // 
+          var song = await _createSongFromMetadata(audioFullPath);
+          
+          // 
+          final albumArt = await _extractAlbumArt(audioFullPath);
+          if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
+
+          // 
+          String? lrcFileName;
+          List<LyricLine> parsedLyrics = [];
+
+          if (lrcFile != null && lrcFile.path != null) {
+            try {
+              // 
+              lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
+              final lrcFullPath = await _getFullPath(lrcFileName);
+              parsedLyrics = await _parseLrcFile(lrcFullPath);
+              
+              // 
+              song = song.copyWith(
+                lrcPath: lrcFileName, // 
+                lyrics: parsedLyrics,
+              );
+            } catch (lrcError) {
+              // 
+              print('[pickAndLoadSong] LRC: $lrcError');
+              lrcFileName = null;
+              parsedLyrics = [];
+            }
+          }
+
+          // 
+          song = song.copyWith(
+            filePath: song.filePath.split('/').last, // 
+            lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
+          );
+          
+          await _dbHelper.insertOrUpdateSong(song);
+          newSongs.add(song);
+        } catch (e) {
+          // 
+          print('[pickAndLoadSong] Group error (${entry.key}): $e');
+        }
+      }
+
+      // 
       final previousLength = state.playlist.length;
       final allSongs = [...state.playlist, ...newSongs];
       state = state.copyWith(playlist: allSongs);
 
+      // 
       if (_player.audioSource == null) {
         final audioSources = <AudioSource>[];
         for (final song in allSongs) {
