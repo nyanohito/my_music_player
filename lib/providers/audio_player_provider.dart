@@ -172,14 +172,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final extension = p.extension(localPath);
       final uniqueFileName = '${nameWithoutExt}_$timestamp$extension';
       final uniquePath = p.join(appDir.path, uniqueFileName);
-      // ★ Fix 1: iCloud権限エラー対策 — File.copy()ではなくバイナリ読み書きで強制コピー
-      final bytes = await File(sourcePath).readAsBytes();
-      await File(uniquePath).writeAsBytes(bytes);
+      // 
+      await File(sourcePath).openRead().pipe(File(uniquePath).openWrite());
       return uniqueFileName; // Return filename only
     } else {
-      // ★ Fix 1: iCloud権限エラー対策 — File.copy()ではなくバイナリ読み書きで強制コピー
-      final bytes = await File(sourcePath).readAsBytes();
-      await File(localPath).writeAsBytes(bytes);
+      // 
+      await File(sourcePath).openRead().pipe(File(localPath).openWrite());
       return fileName; // Return filename only
     }
   }
