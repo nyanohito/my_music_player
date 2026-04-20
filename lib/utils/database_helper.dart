@@ -68,12 +68,12 @@ class DatabaseHelper {
     // Playlist songs junction table
     await db.execute('''
       CREATE TABLE playlist_songs (
-        playlistId TEXT NOT NULL,
-        songId TEXT NOT NULL,
+        playlist_id TEXT NOT NULL,
+        song_id TEXT NOT NULL,
         position INTEGER NOT NULL,
-        PRIMARY KEY (playlistId, songId),
-        FOREIGN KEY (playlistId) REFERENCES playlists (id) ON DELETE CASCADE,
-        FOREIGN KEY (songId) REFERENCES songs (id) ON DELETE CASCADE
+        PRIMARY KEY (playlist_id, song_id),
+        FOREIGN KEY (playlist_id) REFERENCES playlists (id) ON DELETE CASCADE,
+        FOREIGN KEY (song_id) REFERENCES songs (id) ON DELETE CASCADE
       )
     ''');
 
@@ -81,19 +81,19 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE play_history (
         id TEXT PRIMARY KEY,
-        songId TEXT NOT NULL,
-        playedAt INTEGER NOT NULL,
-        playDuration INTEGER DEFAULT 0,
-        FOREIGN KEY (songId) REFERENCES songs (id) ON DELETE CASCADE
+        song_id TEXT NOT NULL,
+        played_at INTEGER NOT NULL,
+        play_duration INTEGER DEFAULT 0,
+        FOREIGN KEY (song_id) REFERENCES songs (id) ON DELETE CASCADE
       )
     ''');
 
     // Create indexes for better performance
     await db.execute('CREATE INDEX idx_songs_file_path ON songs(file_path)');
-    await db.execute('CREATE INDEX idx_songs_isFavorite ON songs(isFavorite)');
+    await db.execute('CREATE INDEX idx_songs_is_favorite ON songs(is_favorite)');
     await db.execute('CREATE INDEX idx_songs_title_artist ON songs(title, artist)');
-    await db.execute('CREATE INDEX idx_playlist_songs_playlistId ON playlist_songs(playlistId)');
-    await db.execute('CREATE INDEX idx_play_history_playedAt ON play_history(playedAt)');
+    await db.execute('CREATE INDEX idx_playlist_songs_playlist_id ON playlist_songs(playlist_id)');
+    await db.execute('CREATE INDEX idx_play_history_played_at ON play_history(played_at)');
   }
 
   /// ★ 既存 DB (v1) に新カラムを追加するマイグレーション
