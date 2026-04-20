@@ -224,8 +224,7 @@ class _LyricLineItem extends StatelessWidget {
 
   // ── 状態ごとのターゲットスタイル ────────────────
   //
-  // TextStyleTween が TextStyle.lerp() で全プロパティを補間するため、
-  // color / fontSize / fontWeight / shadows すべて滑らかにアニメーションします。
+  // 1. フォントサイズは全て26.0に固定
   TextStyle get _targetTextStyle => switch (state) {
         _LyricLineState.highlighted => TextStyle(
             color: Colors.white,
@@ -243,7 +242,7 @@ class _LyricLineItem extends StatelessWidget {
           ),
         _LyricLineState.near => TextStyle(
             color: Colors.white.withValues(alpha: 0.55),
-            fontSize: 19.0,
+            fontSize: 26.0,
             fontWeight: FontWeight.w500,
             height: 1.6,
             letterSpacing: 0.0,
@@ -251,21 +250,28 @@ class _LyricLineItem extends StatelessWidget {
           ),
         _LyricLineState.normal => TextStyle(
             color: Colors.white.withValues(alpha: 0.30),
-            fontSize: 17.0,
+            fontSize: 26.0,
             fontWeight: FontWeight.w400,
             height: 1.6,
             letterSpacing: 0.0,
             shadows: const [],
           ),
-      };
+       };
 
-  @override
+  @Override
   Widget build(BuildContext context) {
     // ── サニタイズ ──────────────────────────────────
     // 空行は視覚的な区切りとして「・」を表示
     final text = lyricLine.text.isEmpty
         ? '・'
         : _LyricSanitizer.clean(lyricLine.text);
+
+    // 2. スケール値の定義
+    final targetScale = switch (state) {
+      _LyricLineState.highlighted => 1.0,
+      _LyricLineState.near => 19.0 / 26.0,
+      _LyricLineState.normal => 17.0 / 26.0,
+    };
 
     return GestureDetector(
       onTap: onTap,
@@ -290,44 +296,50 @@ class _LyricLineItem extends StatelessWidget {
           duration: _kAnimDuration,
           curve: _kAnimCurve,
           builder: (context, animatedStyle, _) {
-            return SizedBox(
-              // ────────────────────────────────────────────────
-              // width: double.infinity で親（ListView の content area）の
-              // 幅いっぱいに tight constraints を確定させます。
-              // ListView.padding の horizontal: 32.0 が既に幅を決定しているため、
-              // LayoutBuilder は不要です（余分なレイアウトパスを削減）。
-              // ────────────────────────────────────────────────
-              width: double.infinity,
-              child: RichText(
-                // ──────────────────────────────────────────────
-                // 【修正】Text → RichText
-                //
-                // RichText は DefaultTextStyle を一切参照しません。
-                // animatedStyle を TextSpan に直接渡すため、
-                // アニメーション中のスタイル補間と幅計算が
-                // 完全に独立した単一のレイアウトパスで処理されます。
-                // ──────────────────────────────────────────────
-                text: TextSpan(
-                  text: text,
-                  style: animatedStyle,
-                ),
-                textAlign: TextAlign.center,
-                // ──────────────────────────────────────────────
-                // textWidthBasis.parent:「最長行の幅」ではなく
-                // 「親から渡された制約幅（= SizedBox の width）」を基準にします。
-                // これにより折り返し最終行の1文字でも
-                // 必ず親幅の中央に配置されます。
-                // ──────────────────────────────────────────────
-                textWidthBasis: TextWidthBasis.parent,
-                // テキスト方向を明示（自動判定による禁則処理の誤爆を防ぐ）
-                textDirection: TextDirection.ltr,
-                softWrap: true,
-                overflow: TextOverflow.visible,
-                strutStyle: const StrutStyle(
-                  forceStrutHeight: true, // 日本語の行高ブレを抑制
-                  leading: 0.3,
-                ),
-              ),
+            // 3. Scaleアニメーションの追加
+            return TweenAnimationBuilder<double>(
+              tween: Tween<double>(end: targetScale),
+              duration: _kAnimDuration,
+              curve: _kAnimCurve,
+              builder: (context, scale, _) {
+                return Transform.scale(
+                  scale: scale,
+                  alignment: Alignment.center,
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: RichText(
+                      // ──────────────────────────────────────────────
+                      // 【修正】Text → RichText
+                      //
+                      // RichText は DefaultTextStyle を一切参照しません。
+                      // animatedStyle を TextSpan に直接渡すため、
+                      // アニメーション中のスタイル補間と幅計算が
+                      // 完全に独立した単一のレイアウトパスで処理されます。
+                      // ──────────────────────────────────────────────
+                      text: TextSpan(
+                        text: text,
+                        style: animatedStyle,
+                      ),
+                      textAlign: TextAlign.center,
+                      // ──────────────────────────────────────────────
+                      // textWidthBasis.parent:「最長行の幅」ではなく
+                      // 「親から渡された制約幅（= SizedBox の width）」を基準にします。
+                      // これにより折り返し最終行の1文字でも
+                      // 必ず親幅の中央に配置されます。
+                      // ──────────────────────────────────────────────
+                      textWidthBasis: TextWidthBasis.parent,
+                      // テキスト方向を明示（自動判定による禁則処理の誤爆を防ぐ）
+                      textDirection: TextDirection.ltr,
+                      softWrap: true,
+                      overflow: TextOverflow.visible,
+                      strutStyle: const StrutStyle(
+                        forceStrutHeight: true, // 日本語の行高ブレを抑制
+                        leading: 0.3,
+                      ),
+                    ),
+                  ),
+                );
+              },
             );
           },
         ),
