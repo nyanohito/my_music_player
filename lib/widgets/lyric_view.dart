@@ -262,21 +262,23 @@ class _LyricLineItem extends StatelessWidget {
             letterSpacing: state == _LyricLineState.highlighted ? 0.2 : 0.0,
             shadows: _shadows,
           ),
-          child: SizedBox(
-            width: double.infinity,
-            child: Center( // Centerで完全な中央揃え
-              child: Container(
-                constraints: BoxConstraints(
-                  maxWidth: double.infinity,
-                ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SizedBox(
+                width: constraints.maxWidth,
                 child: Text(
-                  lyricLine.text.trim(),
+                  lyricLine.text.isEmpty ? '' : lyricLine.text.trim(),
                   textAlign: TextAlign.center,
                   softWrap: true,
                   overflow: TextOverflow.visible,
+                  textWidthBasis: TextWidthBasis.parent,
+                  strutStyle: const StrutStyle(
+                    forceStrutHeight: true,
+                    leading: 0.3,
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ),
       ),
