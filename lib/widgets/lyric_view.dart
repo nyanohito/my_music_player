@@ -258,7 +258,7 @@ class _LyricLineItem extends StatelessWidget {
           ),
        };
 
-  @Override
+  @override
   Widget build(BuildContext context) {
     // ── サニタイズ ──────────────────────────────────
     // 空行は視覚的な区切りとして「・」を表示
