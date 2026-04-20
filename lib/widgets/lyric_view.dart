@@ -68,6 +68,7 @@ class LyricView extends ConsumerStatefulWidget {
 
 class _LyricViewState extends ConsumerState<LyricView> {
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey _currentLyricKey = GlobalKey();
   int _lastHighlightedIndex = -1;
 
   @override
@@ -112,6 +113,7 @@ class _LyricViewState extends ConsumerState<LyricView> {
       itemBuilder: (context, index) {
         final state = _resolveState(index, currentIndex);
         return _LyricLineItem(
+          key: index == currentIndex ? _currentLyricKey : null,
           lyricLine: lyrics[index],
           state: state,
           onTap: () => notifier.seekTo(lyrics[index].position),
@@ -124,23 +126,44 @@ class _LyricViewState extends ConsumerState<LyricView> {
   void _scrollToCurrentLyric(int index) {
     if (!_scrollController.hasClients) return;
 
-    final viewportHeight = _scrollController.position.viewportDimension;
-    final topPadding = viewportHeight * 0.40;
+    final currentContext = _currentLyricKey.currentContext;
+    if (currentContext != null) {
+      // GlobalKeyが有効な場合はensureVisibleで確実に中央配置
+      Scrollable.ensureVisible(
+        currentContext,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      // フォールバック: 概算値でジャンプして次フレームで再試行
+      final viewportHeight = _scrollController.position.viewportDimension;
+      final topPadding = viewportHeight * 0.40;
+      final targetOffset = topPadding +
+          (index * _kItemBaseHeight) -
+          (viewportHeight / 2) +
+          (_kItemBaseHeight / 2);
 
-    // 中央に合わせるオフセット計算
-    final targetOffset = topPadding +
-        (index * _kItemBaseHeight) -
-        (viewportHeight / 2) +
-        (_kItemBaseHeight / 2);
-
-    _scrollController.animateTo(
-      targetOffset.clamp(
-        _scrollController.position.minScrollExtent,
-        _scrollController.position.maxScrollExtent,
-      ),
-      duration: const Duration(milliseconds: 500),
-      curve: Curves.easeInOutCubic,
-    );
+      _scrollController.jumpTo(
+        targetOffset.clamp(
+          _scrollController.position.minScrollExtent,
+          _scrollController.position.maxScrollExtent,
+        ),
+      );
+      
+      // 次フレームでensureVisibleを再試行
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final retryContext = _currentLyricKey.currentContext;
+        if (retryContext != null) {
+          Scrollable.ensureVisible(
+            retryContext,
+            alignment: 0.5,
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      });
+    }
   }
 
   /// インデックスから表示状態を解決
@@ -241,7 +264,7 @@ class _LyricLineItem extends StatelessWidget {
           child: SizedBox(
             width: double.infinity,
             child: Text(
-              lyricLine.text.isEmpty ? '・' : lyricLine.text,
+              lyricLine.text.trim(),
               textAlign: TextAlign.center,
               // ────────────────────────────────────────
               // 【改善 3】softWrap + maxLines なしで
