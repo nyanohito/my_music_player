@@ -54,6 +54,7 @@ dependencies:
   # iOS音声出力切り替え（AirPlay/Bluetooth）- audio_sessionで実装
   # アートワークからドミナントカラーを抽出
   palette_generator: ^0.3.3
+  scrollable_positioned_list: ^0.3.8
 
 dev_dependencies:
   flutter_test:

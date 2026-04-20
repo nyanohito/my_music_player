@@ -2,7 +2,25 @@
 // widgets/lyric_view.dart
 // ============================================================
 //
-//   - scrollable_positioned_list: ^0.3.8
+// ■ アーキテクチャ概要
+//
+//   【課題1: リフロー & ゴーストスペース解決】
+//     _RenderLyricScaleBox (カスタム RenderBox)
+//       - テキストは常に _kBaseFontSize(26sp) でレイアウト計算 → リフロー完全消滅
+//       - 視覚的スケール(Canvas transform)のみアニメーション
+//       - 報告するレイアウト高さ = rawHeight * scale → ゴーストスペース消滅
+//     _AnimatedLyricBox (ImplicitlyAnimatedWidget)
+//       - scale / opacity / verticalPadding を独立したTweenで補間
+//       - forEachTween が「現在値→新ターゲット」を自動管理
+//
+//   【課題2: シーク時スクロール位置ズレ解決】
+//     scrollable_positioned_list パッケージ
+//       - ItemScrollController.scrollTo(index, alignment: 0.5)
+//       - 高さが動的に変動するリストでも index ベースで正確に中央ロック
+//       - ensureVisible/offset計算に依存しないため、複数行高変化に無敵
+//
+// ■ pubspec.yaml に追加:
+//     scrollable_positioned_list: ^0.3.8
 //
 // ============================================================
 
@@ -15,21 +33,25 @@ import '../models/lyric_line.dart';
 import '../providers/audio_player_provider.dart';
 import '../theme/app_theme.dart';
 
-// 
+// ═══════════════════════════════════════════════════════════════
 // CONSTANTS
-// 
+// ═══════════════════════════════════════════════════════════════
 
-/// 26sp
+/// すべての行はこのサイズでテキストレイアウトを計算する。
+/// 非ハイライト行はCanvas transformで縮小するのみ——fontSizeは不変。
 const double _kBaseFontSize = 26.0;
 
+// スケール比（= 見た目上のfontSize / _kBaseFontSize）
 const double _kScaleHighlighted = 1.000;
-const double _kScaleNear        = 19.0 / _kBaseFontSize; 
-const double _kScaleNormal      = 17.0 / _kBaseFontSize; 
+const double _kScaleNear        = 19.0 / _kBaseFontSize; // ≈ 0.731
+const double _kScaleNormal      = 17.0 / _kBaseFontSize; // ≈ 0.654
 
+// 不透明度
 const double _kOpacityHighlighted = 1.00;
 const double _kOpacityNear        = 0.60;
 const double _kOpacityNormal      = 0.28;
 
+// 上下パディング
 const double _kVertPadHighlighted = 14.0;
 const double _kVertPadOther       =  7.0;
 
@@ -37,33 +59,33 @@ const double _kHorizontalPadding  = 32.0;
 const Duration _kAnimDuration     = Duration(milliseconds: 380);
 const Curve _kAnimCurve           = Curves.easeInOutCubic;
 
-// 
+// ═══════════════════════════════════════════════════════════════
 // LYRIC LINE STATE
-// 
+// ═══════════════════════════════════════════════════════════════
 
 enum _LyricLineState { highlighted, near, normal }
 
-// 
+// ═══════════════════════════════════════════════════════════════
 // SANITIZER
-// 
+// ═══════════════════════════════════════════════════════════════
 
 abstract final class _LyricSanitizer {
   static String clean(String raw) => raw
       .replaceAll('\r\n', ' ')
-      .replaceAll('\r', '')       
+      .replaceAll('\r', '')       // ← \r をキャリッジリターンとして解釈するバグを根絶
       .replaceAll('\n', ' ')
-      .replaceAll('\u200B', '')   
-      .replaceAll('\u200C', '')   
-      .replaceAll('\u200D', '')   
-      .replaceAll('\uFEFF', '')   
-      .replaceAll('\u00A0', ' ')  
+      .replaceAll('\u200B', '')   // ZERO WIDTH SPACE
+      .replaceAll('\u200C', '')   // ZERO WIDTH NON-JOINER
+      .replaceAll('\u200D', '')   // ZERO WIDTH JOINER
+      .replaceAll('\uFEFF', '')   // BOM
+      .replaceAll('\u00A0', ' ')  // NO-BREAK SPACE → 通常スペース（禁則処理誤爆防止）
       .replaceAll(RegExp(r' {2,}'), ' ')
       .trim();
 }
 
-// 
+// ═══════════════════════════════════════════════════════════════
 // MAIN WIDGET
-// 
+// ═══════════════════════════════════════════════════════════════
 
 class LyricView extends ConsumerStatefulWidget {
   const LyricView({super.key});
@@ -73,12 +95,13 @@ class LyricView extends ConsumerStatefulWidget {
 }
 
 class _LyricViewState extends ConsumerState<LyricView> {
+  // ── scrollable_positioned_list controllers ──────────────────
   final ItemScrollController _scrollController = ItemScrollController();
   final ItemPositionsListener _positionsListener = ItemPositionsListener.create();
 
   int _lastHighlightedIndex = -1;
   String? _lastSongId;
-  bool _isInitialScroll = true; 
+  bool _isInitialScroll = true; // 初回はアニメーションなしで即ジャンプ
 
   @override
   Widget build(BuildContext context) {
@@ -88,12 +111,14 @@ class _LyricViewState extends ConsumerState<LyricView> {
     final currentIdx  = playerState.currentLyricIndex;
     final songId      = playerState.currentSong?.id;
 
+    // 曲が変わったらスクロール状態をリセット
     if (songId != _lastSongId) {
       _lastSongId           = songId;
       _lastHighlightedIndex = -1;
       _isInitialScroll      = true;
     }
 
+    // ハイライト行が変わったらスクロール命令をpost
     if (currentIdx != _lastHighlightedIndex &&
         currentIdx >= 0 &&
         currentIdx < lyrics.length) {
@@ -106,6 +131,16 @@ class _LyricViewState extends ConsumerState<LyricView> {
     if (lyrics.isEmpty) return const _EmptyLyricView();
 
     return ScrollablePositionedList.builder(
+      // ─────────────────────────────────────────────────────────
+      // 【課題2の核心】
+      // ScrollablePositionedList は offset ベースではなく
+      // index ベースでスクロール位置を管理する。
+      // scrollTo(index, alignment: 0.5) は:
+      //   1. 対象 index のアイテムを仮想リストの先頭に置いた
+      //      サブリストを構築し直す
+      //   2. alignment=0.5 でそのアイテムをビューポート中央に配置
+      // → 上にある複数行の高さが一斉に変動しても計算がずれない
+      // ─────────────────────────────────────────────────────────
       itemCount: lyrics.length,
       itemScrollController: _scrollController,
       itemPositionsListener: _positionsListener,
@@ -128,7 +163,7 @@ class _LyricViewState extends ConsumerState<LyricView> {
 
     _scrollController.scrollTo(
       index: index,
-      alignment: 0.5, 
+      alignment: 0.5, // ビューポートの中央に配置
       duration: _isInitialScroll ? Duration.zero : const Duration(milliseconds: 450),
       curve: Curves.easeOutCubic,
     );
@@ -143,9 +178,9 @@ class _LyricViewState extends ConsumerState<LyricView> {
   }
 }
 
-// 
+// ═══════════════════════════════════════════════════════════════
 // LYRIC LINE ITEM
-// 
+// ═══════════════════════════════════════════════════════════════
 
 class _LyricLineItem extends StatelessWidget {
   const _LyricLineItem({
@@ -175,7 +210,7 @@ class _LyricLineItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = lyricLine.text.isEmpty ? ' ' : _LyricSanitizer.clean(lyricLine.text);
+    final text = lyricLine.text.isEmpty ? '・' : _LyricSanitizer.clean(lyricLine.text);
 
     return GestureDetector(
       onTap: onTap,
@@ -192,9 +227,15 @@ class _LyricLineItem extends StatelessWidget {
   }
 }
 
-// 
+// ═══════════════════════════════════════════════════════════════
 // ANIMATED LYRIC BOX  (ImplicitlyAnimatedWidget)
-// 
+// ═══════════════════════════════════════════════════════════════
+//
+// forEachTween により、state が変わるたびに
+// 「現在の補間途中の値 → 新ターゲット」へ正確に再アニメーションされる。
+// scale / opacity / verticalPadding は完全独立したTweenで補間。
+//
+// ═══════════════════════════════════════════════════════════════
 
 class _AnimatedLyricBox extends ImplicitlyAnimatedWidget {
   const _AnimatedLyricBox({
@@ -249,6 +290,7 @@ class _AnimatedLyricBoxState
     final opacity = _opacityTween?.evaluate(animation) ?? widget.opacity;
     final vertPad = _vertPadTween?.evaluate(animation) ?? widget.verticalPadding;
 
+    // グロー影: scale が _kScaleHighlighted に近づくほど強くなる
     final glowT = ((scale - _kScaleNormal) / (_kScaleHighlighted - _kScaleNormal))
         .clamp(0.0, 1.0);
     final shadowAlpha = glowT * 0.38;
@@ -265,9 +307,9 @@ class _AnimatedLyricBoxState
   }
 }
 
-// 
+// ═══════════════════════════════════════════════════════════════
 // _LyricScaleBox  (LeafRenderObjectWidget)
-// 
+// ═══════════════════════════════════════════════════════════════
 
 class _LyricScaleBox extends LeafRenderObjectWidget {
   const _LyricScaleBox({
@@ -298,6 +340,7 @@ class _LyricScaleBox extends LeafRenderObjectWidget {
   @override
   void updateRenderObject(
       BuildContext context, _RenderLyricScaleBox renderObject) {
+    // 各 setter が変化があった場合のみ markNeedsLayout / markNeedsPaint を呼ぶ
     renderObject
       ..text           = text
       ..scale          = scale
@@ -307,9 +350,26 @@ class _LyricScaleBox extends LeafRenderObjectWidget {
   }
 }
 
-// 
-// _RenderLyricScaleBox  (Custom RenderBox)
-// 
+// ═══════════════════════════════════════════════════════════════
+// _RenderLyricScaleBox  (カスタム RenderBox)
+// ═══════════════════════════════════════════════════════════════
+//
+// 【レイアウトの仕組み】
+//   performLayout() では常に _kBaseFontSize(26sp) でテキストを測定する。
+//   報告するサイズは:
+//     width  = constraints.maxWidth   （常に親幅いっぱい）
+//     height = (textPainterHeight + vertPad*2) * scale
+//   → scale が小さくなると高さも縮む → ゴーストスペース消滅
+//
+// 【描画の仕組み】
+//   paint() では Canvas にスケール変換を適用する:
+//     1. レイアウトボックスの中心へ移動
+//     2. scale 変換（縮小）
+//     3. フルサイズコンテンツボックスの左上へ戻す
+//     4. テキストを垂直パディングつきで描画
+//   → フォントサイズは変わらず、Canvas 上でスケールダウン → リフロー完全消滅
+//
+// ═══════════════════════════════════════════════════════════════
 
 class _RenderLyricScaleBox extends RenderBox {
   _RenderLyricScaleBox({
@@ -326,12 +386,16 @@ class _RenderLyricScaleBox extends RenderBox {
     _rebuildPainter();
   }
 
+  // ── Fields ──────────────────────────────────────
+
   String          _text;
   double          _scale;
   Color           _color;
   List<Shadow>    _shadows;
   double          _verticalPadding;
   late TextPainter _painter;
+
+  // ── Setters ─────────────────────────────────────
 
   set text(String v) {
     if (_text == v) return;
@@ -343,14 +407,14 @@ class _RenderLyricScaleBox extends RenderBox {
   set scale(double v) {
     if (_scale == v) return;
     _scale = v;
-    markNeedsLayout(); 
+    markNeedsLayout(); // 高さが変わる
   }
 
   set color(Color v) {
     if (_color == v) return;
     _color = v;
     _rebuildPainter();
-    markNeedsPaint(); 
+    markNeedsPaint(); // レイアウトには影響しない
   }
 
   set shadows(List<Shadow> v) {
@@ -365,13 +429,18 @@ class _RenderLyricScaleBox extends RenderBox {
     markNeedsLayout();
   }
 
+  // ── TextPainter 構築 ─────────────────────────────
+  //
+  // fontSizeは常に _kBaseFontSize 固定。
+  // これがリフロー消滅の根拠: テキストの折り返し判定が不変。
+  //
   void _rebuildPainter() {
     _painter = TextPainter(
       text: TextSpan(
         text: _text,
         style: TextStyle(
           color: _color,
-          fontSize: _kBaseFontSize, 
+          fontSize: _kBaseFontSize, // ← 絶対に変えない
           fontWeight: FontWeight.w700,
           height: 1.55,
           letterSpacing: 0.15,
@@ -380,10 +449,12 @@ class _RenderLyricScaleBox extends RenderBox {
       ),
       textDirection: TextDirection.ltr,
       textAlign: TextAlign.center,
-      textWidthBasis: TextWidthBasis.parent, 
+      textWidthBasis: TextWidthBasis.parent, // 折り返し最終行も確実に中央揃え
       strutStyle: const StrutStyle(forceStrutHeight: true, leading: 0.3),
     );
   }
+
+  // ── Layout ───────────────────────────────────────
 
   @override
   void performLayout() {
@@ -392,6 +463,8 @@ class _RenderLyricScaleBox extends RenderBox {
     final rawH = _painter.height + _verticalPadding * 2;
     size = Size(maxW, rawH * _scale);
   }
+
+  // ── Paint ────────────────────────────────────────
 
   @override
   void paint(PaintingContext context, Offset offset) {
@@ -402,19 +475,25 @@ class _RenderLyricScaleBox extends RenderBox {
 
     canvas.save();
 
+    // ① スケール後のレイアウトボックス中心へ移動
     canvas.translate(
       offset.dx + size.width / 2,
       offset.dy + size.height / 2,
     );
 
+    // ② スケール変換 (フォントサイズは変えず、canvas上で縮小)
     canvas.scale(_scale);
 
+    // ③ フルサイズコンテンツボックスの左上へ戻す
     canvas.translate(-size.width / 2, -rawH / 2);
 
+    // ④ テキストを垂直パディングつきで描画
     _painter.paint(canvas, Offset(0.0, _verticalPadding));
 
     canvas.restore();
   }
+
+  // ── Intrinsic sizes ──────────────────────────────
 
   @override
   double computeMinIntrinsicHeight(double width) {
@@ -436,9 +515,9 @@ class _RenderLyricScaleBox extends RenderBox {
   bool hitTestSelf(Offset position) => true;
 }
 
-// 
+// ═══════════════════════════════════════════════════════════════
 // EMPTY STATE
-// 
+// ═══════════════════════════════════════════════════════════════
 
 class _EmptyLyricView extends StatelessWidget {
   const _EmptyLyricView();
@@ -452,7 +531,7 @@ class _EmptyLyricView extends StatelessWidget {
           Icon(Icons.lyrics_outlined, color: AppColors.textDisabled, size: 48),
           SizedBox(height: 16),
           Text(
-            ' ',
+            '歌詞がありません',
             style: TextStyle(
               color: AppColors.textDisabled,
               fontSize: 16,
@@ -461,7 +540,7 @@ class _EmptyLyricView extends StatelessWidget {
           ),
           SizedBox(height: 8),
           Text(
-            'LRC',
+            'LRCファイルを追加して歌詞を表示しましょう',
             style: TextStyle(
               color: AppColors.textDisabled,
               fontSize: 13,
