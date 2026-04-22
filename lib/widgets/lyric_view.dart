@@ -1,10 +1,45 @@
 // ============================================================
-// widgets/lyric_view.dart
-// Spotify スタイル歌詞表示（左揃え・大文字・ゆったり行間）
+// widgets/lyric_view.dart  — v4 完全書き直し
+// ============================================================
+//
+// ■ これまでの問題の根本原因
+//
+//   ① カスタム RenderBox の strutStyle(forceStrutHeight: true, leading: 0.2) が
+//     TextStyle.height: 1.45 の行間を強制上書きし、
+//     日本語の縦スペースを圧縮していた（全状態で潰れる原因）。
+//
+//   ② computeMinIntrinsicHeight() が同一の _painter に
+//     異なる maxWidth で layout() を呼び、
+//     その後 performLayout() に使われる painter の状態を汚染していた。
+//
+//   ③ _painter.debugDisposed はデバッグビルド専用プロパティであり
+//     リリースビルドで意図通りに動作しない。
+//
+// ■ 新アーキテクチャ：カスタム RenderBox を全廃
+//
+//   カスタム RenderBox の代わりに、Flutter 標準ウィジェットの組み合わせで
+//   「リフローなし・ゴーストスペースなし・クリップなし」を実現する:
+//
+//     SizedBox(height: rawH × scale)          … リストへの高さ申告
+//     └─ ClipRect                             … 視覚オーバーフロー防止
+//        └─ OverflowBox(maxHeight: rawH)      … 子がフルサイズで描画できる余地
+//           └─ Transform.scale(topLeft)       … 視覚縮小（フォントサイズ不変）
+//              └─ SizedBox(h: rawH, w: maxW)  … フルサイズコンテナ
+//                 └─ Padding(vertical: pad)
+//                    └─ RichText(32sp, left)  … 実テキスト
+//
+//   【なぜこれで潰れないか】
+//     fontSizeは常に32sp固定 → TextPainterの折り返し判定が絶対に変わらない。
+//     Transform.scale はキャンバスを縮小するだけなのでリフローゼロ。
+//     SizedBox(height: rawH×scale) が高さを申告するのでゴーストスペースゼロ。
+//     OverflowBox が rawH の描画空間を確保するのでクリップゼロ。
+//
+// ■ pubspec.yaml に必要なパッケージ:
+//     scrollable_positioned_list: ^0.3.8
+//
 // ============================================================
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
@@ -16,16 +51,14 @@ import '../theme/app_theme.dart';
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════
 
-// ─── フォントサイズ ──────────────────────────────────────────
-// テキストのレイアウト計算は常にこのサイズで行う（リフロー防止）。
-// 非ハイライト行は Canvas transform で縮小するのみ。
+/// 全行共通の基準フォントサイズ。絶対に変更しない。
+/// 非ハイライト行は Transform.scale で縮小するのみ。
 const double _kBaseFontSize = 32.0;
 
 // ─── スケール比 ──────────────────────────────────────────────
-// Spotify 準拠: ハイライト行は大きく、それ以外は少し小さく。
-const double _kScaleHighlighted = 1.000;                    // 32sp 相当
-const double _kScaleNear        = 28.0 / _kBaseFontSize;   // ≈ 0.875（直前後）
-const double _kScaleNormal      = 24.0 / _kBaseFontSize;   // ≈ 0.750（通常）
+const double _kScaleHighlighted = 1.000;                  // 32sp 相当
+const double _kScaleNear        = 28.0 / _kBaseFontSize;  // 28sp 相当
+const double _kScaleNormal      = 24.0 / _kBaseFontSize;  // 24sp 相当
 
 // ─── 不透明度 ────────────────────────────────────────────────
 const double _kOpacityHighlighted = 1.00;
@@ -37,11 +70,19 @@ const double _kVertPadHighlighted = 16.0;
 const double _kVertPadOther       =  8.0;
 
 // ─── 左右余白 ────────────────────────────────────────────────
-// Spotify は左右に余白を設けて左揃えで表示する。
 const double _kHorizontalPadding = 24.0;
 
 const Duration _kAnimDuration = Duration(milliseconds: 400);
 const Curve    _kAnimCurve    = Curves.easeInOutCubic;
+
+/// テキスト高さ測定用スタイル（RichText の描画スタイルと完全一致させること）
+const TextStyle _kMeasureStyle = TextStyle(
+  fontSize:      _kBaseFontSize,
+  fontWeight:    FontWeight.w700,
+  height:        1.5,    // 行間係数: デフォルト(≈1.2) より広め
+  letterSpacing: -0.3,
+  // color は測定に不要なので省略
+);
 
 // ═══════════════════════════════════════════════════════════════
 // LYRIC LINE STATE
@@ -58,11 +99,11 @@ abstract final class _LyricSanitizer {
       .replaceAll('\r\n', ' ')
       .replaceAll('\r', '')
       .replaceAll('\n', ' ')
-      .replaceAll('\u200B', '')
-      .replaceAll('\u200C', '')
-      .replaceAll('\u200D', '')
-      .replaceAll('\uFEFF', '')
-      .replaceAll('\u00A0', ' ')
+      .replaceAll('\u200B', '')   // ZERO WIDTH SPACE
+      .replaceAll('\u200C', '')   // ZERO WIDTH NON-JOINER
+      .replaceAll('\u200D', '')   // ZERO WIDTH JOINER
+      .replaceAll('\uFEFF', '')   // BOM
+      .replaceAll('\u00A0', ' ')  // NO-BREAK SPACE
       .replaceAll(RegExp(r' {2,}'), ' ')
       .trim();
 }
@@ -79,8 +120,8 @@ class LyricView extends ConsumerStatefulWidget {
 }
 
 class _LyricViewState extends ConsumerState<LyricView> {
-  final ItemScrollController _scrollController = ItemScrollController();
-  final ItemPositionsListener _positionsListener = ItemPositionsListener.create();
+  final ItemScrollController    _scrollController  = ItemScrollController();
+  final ItemPositionsListener   _positionsListener = ItemPositionsListener.create();
 
   int     _lastHighlightedIndex = -1;
   String? _lastSongId;
@@ -110,105 +151,157 @@ class _LyricViewState extends ConsumerState<LyricView> {
     if (lyrics.isEmpty) return const _EmptyLyricView();
 
     return ScrollablePositionedList.builder(
-      itemCount: lyrics.length,
-      itemScrollController: _scrollController,
-      itemPositionsListener: _positionsListener,
-      // ── Spotify の余白設計 ──────────────────────────────────
-      // 上下: 画面の 35% ぶんの余白でハイライト行が中央付近に来る
-      // 左右: 24px の余白で左揃えテキストに余裕を持たせる
+      itemCount:              lyrics.length,
+      itemScrollController:   _scrollController,
+      itemPositionsListener:  _positionsListener,
       padding: EdgeInsets.only(
-        top:    MediaQuery.of(context).size.height * 0.35,
-        bottom: MediaQuery.of(context).size.height * 0.35,
+        top:    MediaQuery.of(context).size.height * 0.38,
+        bottom: MediaQuery.of(context).size.height * 0.38,
         left:   _kHorizontalPadding,
         right:  _kHorizontalPadding,
       ),
-      itemBuilder: (context, index) {
-        return _LyricLineItem(
-          lyricLine: lyrics[index],
-          state: _resolveState(index, currentIdx),
-          onTap: () => notifier.seekTo(lyrics[index].position),
-        );
-      },
+      itemBuilder: (context, index) => _LyricLineItem(
+        key:      ValueKey('${songId}_$index'),
+        lyricLine: lyrics[index],
+        state:    _resolveState(index, currentIdx),
+        onTap:    () => notifier.seekTo(lyrics[index].position),
+      ),
     );
   }
 
   void _scrollToIndex(int index) {
     if (!_scrollController.isAttached) return;
     _scrollController.scrollTo(
-      index: index,
+      index:     index,
       alignment: 0.5,
-      duration: _isInitialScroll
-          ? Duration.zero
-          : const Duration(milliseconds: 450),
-      curve: Curves.easeOutCubic,
+      duration:  _isInitialScroll ? Duration.zero : const Duration(milliseconds: 450),
+      curve:     Curves.easeOutCubic,
     );
     _isInitialScroll = false;
   }
 
   _LyricLineState _resolveState(int index, int current) {
-    if (current < 0)                   return _LyricLineState.normal;
-    if (index == current)              return _LyricLineState.highlighted;
-    if ((index - current).abs() == 1)  return _LyricLineState.near;
+    if (current < 0)                  return _LyricLineState.normal;
+    if (index == current)             return _LyricLineState.highlighted;
+    if ((index - current).abs() == 1) return _LyricLineState.near;
     return _LyricLineState.normal;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// LYRIC LINE ITEM
+// _LyricLineItem  (StatefulWidget)
+// ═══════════════════════════════════════════════════════════════
+//
+// StatefulWidget にする理由:
+//   テキスト高さの測定結果をキャッシュし、
+//   lyric 行が再ビルドされても TextPainter.layout() を毎回呼ばないため。
+//   幅が変化したとき（端末回転等）のみ再測定する。
+//
 // ═══════════════════════════════════════════════════════════════
 
-class _LyricLineItem extends StatelessWidget {
+class _LyricLineItem extends StatefulWidget {
   const _LyricLineItem({
+    super.key,
     required this.lyricLine,
     required this.state,
     required this.onTap,
   });
 
-  final LyricLine lyricLine;
-  final _LyricLineState state;
-  final VoidCallback onTap;
+  final LyricLine        lyricLine;
+  final _LyricLineState  state;
+  final VoidCallback     onTap;
 
-  double get _targetScale   => switch (state) {
+  @override
+  State<_LyricLineItem> createState() => _LyricLineItemState();
+}
+
+class _LyricLineItemState extends State<_LyricLineItem> {
+  double _cachedWidth  = -1;
+  double _naturalHeight = _kBaseFontSize * 1.5; // 初期値フォールバック（1行分相当）
+
+  /// テキストを _kBaseFontSize で描画したときの高さを測定する。
+  /// 前回と同じ幅なら測定をスキップしてキャッシュを返す。
+  double _measureNaturalHeight(double maxWidth, String text) {
+    if ((maxWidth - _cachedWidth).abs() < 0.5) return _naturalHeight;
+
+    final tp = TextPainter(
+      text:           TextSpan(text: text, style: _kMeasureStyle),
+      textDirection:  TextDirection.ltr,
+      textAlign:      TextAlign.left,
+      textWidthBasis: TextWidthBasis.parent,
+    )..layout(maxWidth: maxWidth);
+
+    _cachedWidth   = maxWidth;
+    _naturalHeight = tp.height;
+    tp.dispose(); // リソース解放
+    return _naturalHeight;
+  }
+
+  String get _cleanText =>
+      widget.lyricLine.text.isEmpty
+          ? '♪'
+          : _LyricSanitizer.clean(widget.lyricLine.text);
+
+  double get _targetScale => switch (widget.state) {
     _LyricLineState.highlighted => _kScaleHighlighted,
     _LyricLineState.near        => _kScaleNear,
     _LyricLineState.normal      => _kScaleNormal,
   };
 
-  double get _targetOpacity => switch (state) {
+  double get _targetOpacity => switch (widget.state) {
     _LyricLineState.highlighted => _kOpacityHighlighted,
     _LyricLineState.near        => _kOpacityNear,
     _LyricLineState.normal      => _kOpacityNormal,
   };
 
   double get _targetVertPad =>
-      state == _LyricLineState.highlighted ? _kVertPadHighlighted : _kVertPadOther;
+      widget.state == _LyricLineState.highlighted
+          ? _kVertPadHighlighted
+          : _kVertPadOther;
 
   @override
   Widget build(BuildContext context) {
-    final text = lyricLine.text.isEmpty ? '♪' : _LyricSanitizer.clean(lyricLine.text);
+    final text = _cleanText;
 
     return GestureDetector(
-      onTap: onTap,
+      onTap:    widget.onTap,
       behavior: HitTestBehavior.opaque,
-      child: _AnimatedLyricBox(
-        text: text,
-        scale: _targetScale,
-        opacity: _targetOpacity,
-        verticalPadding: _targetVertPad,
-        duration: _kAnimDuration,
-        curve: _kAnimCurve,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 幅が変化したときのみ TextPainter.layout() を再実行する
+          final naturalHeight = _measureNaturalHeight(constraints.maxWidth, text);
+
+          return _AnimatedLyricBox(
+            text:            text,
+            naturalHeight:   naturalHeight,
+            availableWidth:  constraints.maxWidth,
+            scale:           _targetScale,
+            opacity:         _targetOpacity,
+            verticalPadding: _targetVertPad,
+            duration:        _kAnimDuration,
+            curve:           _kAnimCurve,
+          );
+        },
       ),
     );
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ANIMATED LYRIC BOX  (ImplicitlyAnimatedWidget)
+// _AnimatedLyricBox  (ImplicitlyAnimatedWidget)
+// ═══════════════════════════════════════════════════════════════
+//
+// scale / opacity / verticalPadding を独立した Tween で補間する。
+// forEachTween により「アニメーション途中で state が変わっても
+// 現在の補間値から新ターゲットへ再アニメーション」が保証される。
+//
 // ═══════════════════════════════════════════════════════════════
 
 class _AnimatedLyricBox extends ImplicitlyAnimatedWidget {
   const _AnimatedLyricBox({
     required this.text,
+    required this.naturalHeight,
+    required this.availableWidth,
     required this.scale,
     required this.opacity,
     required this.verticalPadding,
@@ -217,6 +310,8 @@ class _AnimatedLyricBox extends ImplicitlyAnimatedWidget {
   });
 
   final String text;
+  final double naturalHeight;   // _kMeasureStyle で測定したテキスト高さ
+  final double availableWidth;  // LayoutBuilder から取得した利用可能幅
   final double scale;
   final double opacity;
   final double verticalPadding;
@@ -256,255 +351,97 @@ class _AnimatedLyricBoxState
     final opacity = _opacityTween?.evaluate(animation) ?? widget.opacity;
     final vertPad = _vertPadTween?.evaluate(animation) ?? widget.verticalPadding;
 
-    // ハイライト行に近づくほど白いグロー影を強くする
+    // フルサイズ（scale=1.0 時）のアイテム高さ
+    final rawH = widget.naturalHeight + vertPad * 2;
+
+    // ハイライト度合いに応じてグロー影を強める（0.0〜1.0）
     final glowT = ((scale - _kScaleNormal) /
         (_kScaleHighlighted - _kScaleNormal)).clamp(0.0, 1.0);
 
-    return _LyricScaleBox(
-      text: widget.text,
-      scale: scale,
-      color: Colors.white.withValues(alpha: opacity),
-      shadows: glowT > 0.05
-          ? [Shadow(
-              color: Colors.white.withValues(alpha: glowT * 0.30),
-              blurRadius: 16,
-            )]
-          : const [],
-      verticalPadding: vertPad,
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// _LyricScaleBox  (LeafRenderObjectWidget)
-// ═══════════════════════════════════════════════════════════════
-
-class _LyricScaleBox extends LeafRenderObjectWidget {
-  const _LyricScaleBox({
-    required this.text,
-    required this.scale,
-    required this.color,
-    required this.shadows,
-    required this.verticalPadding,
-  });
-
-  final String       text;
-  final double       scale;
-  final Color        color;
-  final List<Shadow> shadows;
-  final double       verticalPadding;
-
-  @override
-  _RenderLyricScaleBox createRenderObject(BuildContext context) =>
-      _RenderLyricScaleBox(
-        text: text, scale: scale, color: color,
-        shadows: shadows, verticalPadding: verticalPadding,
-      );
-
-  @override
-  void updateRenderObject(BuildContext context, _RenderLyricScaleBox r) {
-    r..text            = text
-     ..scale           = scale
-     ..color           = color
-     ..shadows         = shadows
-     ..verticalPadding = verticalPadding;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// _RenderLyricScaleBox  (カスタム RenderBox)
-//
-// 【レイアウト】
-//   performLayout: 常に _kBaseFontSize(32sp) でテキストを測定。
-//   報告する高さ = (textH + vertPad*2) * scale
-//   → scale が小さくなると Layout 上の高さも縮む（ゴーストスペース消滅）
-//   → fontSizeは一切変わらないのでリフロー完全消滅
-//
-// 【描画】
-//   paint: Canvas を scale 変換してから描画
-//   → 視覚的にフォントが縮むが、折り返し判定は変わらない
-//
-// 【揃え: LEFT（Spotify スタイル）】
-//   TextAlign.left + textWidthBasis: TextWidthBasis.parent
-// ═══════════════════════════════════════════════════════════════
-
-class _RenderLyricScaleBox extends RenderBox {
-  _RenderLyricScaleBox({
-    required String text,
-    required double scale,
-    required Color color,
-    required List<Shadow> shadows,
-    required double verticalPadding,
-  })  : _text            = text,
-        _scale           = scale,
-        _color           = color,
-        _shadows         = List.from(shadows),
-        _verticalPadding = verticalPadding {
-    _rebuildPainter();
-  }
-
-  String       _text;
-  double       _scale;
-  Color        _color;
-  List<Shadow> _shadows;
-  double       _verticalPadding;
-  late TextPainter _painter;
-
-  // ── Setters ─────────────────────────────────────
-
-  set text(String v) {
-    if (_text == v) return;
-    _text = v;
-    _rebuildPainter();
-    markNeedsLayout();
-  }
-
-  set scale(double v) {
-    if (_scale == v) return;
-    _scale = v;
-    markNeedsLayout();
-  }
-
-  set color(Color v) {
-    if (_color == v) return;
-    _color = v;
-    _updatePainterSpan();
-    // ★ バグ修正: markNeedsPaint() → markNeedsLayout()
-    //
-    // _rebuildPainter() / _updatePainterSpan() は TextPainter の text を更新する。
-    // TextPainter.text の更新はレイアウトを無効にするため、
-    // 必ず performLayout() → _painter.layout() を経由してから
-    // paint() が呼ばれなければならない。
-    //
-    // 従来の markNeedsPaint() だとレイアウトをスキップするため、
-    // paint() 内で _painter.height が 0 を返し（未レイアウト状態）、
-    // rawH = 0 + padding しか確保されず全テキストが潰れてクリップされていた。
-    markNeedsLayout();
-  }
-
-  set shadows(List<Shadow> v) {
-    if (_listEquals(_shadows, v)) return;
-    _shadows = List.from(v);
-    _updatePainterSpan();
-    markNeedsLayout(); // ★ 同上: markNeedsPaint() → markNeedsLayout()
-  }
-
-  set verticalPadding(double v) {
-    if (_verticalPadding == v) return;
-    _verticalPadding = v;
-    markNeedsLayout();
-  }
-
-  // ── TextPainter 管理 ────────────────────────────
-  //
-  // TextPainter オブジェクト自体は一度だけ生成し（コンストラクタで）、
-  // text プロパティのみを更新する。
-  // これにより textAlign / textDirection / strutStyle 等の
-  // イミュータブル設定が保持される。
-  //
-  void _rebuildPainter() {
-    // 初回生成のみ呼ぶ（コンストラクタから呼ばれる）
-    _painter = TextPainter(
-      textDirection: TextDirection.ltr,
-      textAlign: TextAlign.left,             // Spotify スタイル: 左揃え
-      textWidthBasis: TextWidthBasis.parent, // 親幅基準で折り返す
-      strutStyle: const StrutStyle(
-        forceStrutHeight: true,
-        leading: 0.2,
-      ),
-    );
-    _updatePainterSpan();
-  }
-
-  void _updatePainterSpan() {
-    // text プロパティの更新は内部でレイアウトを無効化する
-    _painter.text = TextSpan(
-      text: _text,
-      style: TextStyle(
-        color: _color,
-        fontSize: _kBaseFontSize, // ← 絶対に変えない（リフロー防止の根拠）
-        fontWeight: FontWeight.w700,
-        height: 1.45,
-        letterSpacing: -0.3,
-        shadows: _shadows,
+    return SizedBox(
+      // ────────────────────────────────────────────────────────────
+      // ① SizedBox(height: rawH * scale)
+      //    ScrollablePositionedList のリストアイテムに「この行の高さ」を伝える。
+      //    scale が 0.75 なら高さも 75% → ゴーストスペース消滅。
+      // ────────────────────────────────────────────────────────────
+      height: rawH * scale,
+      child: ClipRect(
+        // ──────────────────────────────────────────────────────────
+        // ② ClipRect
+        //    SizedBox の境界（rawH * scale）を超えた視覚コンテンツを切り捨てる。
+        //    Transform.scale が正確に縮小するのでクリップは発生しないが
+        //    万一の浮動小数点誤差を吸収する安全網。
+        // ──────────────────────────────────────────────────────────
+        child: OverflowBox(
+          // ────────────────────────────────────────────────────────
+          // ③ OverflowBox(maxHeight: rawH)
+          //    子ウィジェットが「フルサイズ rawH」でレイアウトできるよう許可する。
+          //    SizedBox は rawH*scale しか割り当てていないが、
+          //    OverflowBox がそれを超えた制約を子に渡す。
+          //    Transform.scale が縮小するので視覚的には境界内に収まる。
+          // ────────────────────────────────────────────────────────
+          alignment:  Alignment.topLeft,
+          minHeight:  0,
+          maxHeight:  rawH,
+          minWidth:   0,
+          maxWidth:   widget.availableWidth,
+          child: Transform.scale(
+            // ──────────────────────────────────────────────────────
+            // ④ Transform.scale(scale, Alignment.topLeft)
+            //    フォントサイズは 32sp 固定のまま、キャンバスだけを縮小する。
+            //    → テキストの折り返し判定が一切変わらない = リフロー完全消滅
+            //    Alignment.topLeft: 左端・上端を起点にスケール
+            //    → 横ブレなし（前回の「ウネウネ」バグ修正済み）
+            // ──────────────────────────────────────────────────────
+            scale:     scale,
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width:  widget.availableWidth,
+              height: rawH,
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: vertPad),
+                child: RichText(
+                  // ────────────────────────────────────────────────
+                  // ⑤ RichText (DefaultTextStyle を参照しない)
+                  //    Text ウィジェットは DefaultTextStyle(InheritedWidget) を
+                  //    参照するため、アニメーション中のスタイル継承が
+                  //    レイアウト計算と競合する場合がある。
+                  //    RichText は TextSpan.style のみを参照するため安全。
+                  //
+                  //    fontSize: _kBaseFontSize  ← 絶対に変えない
+                  //    height: 1.5              ← strutStyle なし・シンプルな行間
+                  //    strutStyle は使用しない  ← forceStrutHeight が行間を
+                  //                               圧縮していた原因を根絶
+                  // ────────────────────────────────────────────────
+                  text: TextSpan(
+                    text:  widget.text,
+                    style: TextStyle(
+                      color:         Colors.white.withValues(alpha: opacity),
+                      fontSize:      _kBaseFontSize, // ← 絶対に変えない
+                      fontWeight:    FontWeight.w700,
+                      height:        1.5,
+                      letterSpacing: -0.3,
+                      shadows: glowT > 0.05
+                          ? [Shadow(
+                              color:      Colors.white.withValues(alpha: glowT * 0.28),
+                              blurRadius: 18,
+                            )]
+                          : const [],
+                    ),
+                  ),
+                  textAlign:      TextAlign.left,           // Spotify スタイル
+                  textWidthBasis: TextWidthBasis.parent,    // 折り返し最終行も確実に左揃え
+                  textDirection:  TextDirection.ltr,
+                  softWrap:       true,
+                  overflow:       TextOverflow.visible,
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
-
-  static bool _listEquals(List<Shadow> a, List<Shadow> b) {
-    if (a.length != b.length) return false;
-    for (int i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
-
-  // ── Layout ───────────────────────────────────────
-
-  @override
-  void performLayout() {
-    final maxW = constraints.maxWidth;
-    // ここで必ず layout() を呼ぶことで、直前の _updatePainterSpan() による
-    // 無効化が解消され、以降 _painter.height が正しい値を返す。
-    _painter.layout(maxWidth: maxW);
-    final rawH = _painter.height + _verticalPadding * 2;
-    // Layout 高さを scale で縮める → ゴーストスペース消滅
-    size = Size(maxW, rawH * _scale);
-  }
-
-  // ── Paint ────────────────────────────────────────
-
-  @override
-  void paint(PaintingContext context, Offset offset) {
-    if (_scale <= 0.0) return;
-
-    // 安全網: 万一レイアウト未実行のまま paint が呼ばれても正しく描画する。
-    // （通常は performLayout → paint の順で呼ばれるため不要だが念のため）
-    if (!_painter.debugDisposed) {
-      try {
-        _painter.layout(maxWidth: size.width);
-      } catch (_) {
-        // すでにレイアウト済みの場合は何もしない
-      }
-    }
-
-    final canvas  = context.canvas;
-    final rawH    = _painter.height + _verticalPadding * 2;
-
-    canvas.save();
-
-    // スケールの起点を「左上」に固定する。
-    //   X = offset.dx（左端ピン留め: 横ブレ完全防止）
-    //   Y = offset.dy（上端ピン留め: シンプルで正確）
-    // scale 後にテキストを _verticalPadding 分だけ下へずらして描画する。
-    // rawH * _scale = size.height となるため、テキストは必ず bounds 内に収まる。
-    canvas.translate(offset.dx, offset.dy);
-    canvas.scale(_scale);
-    _painter.paint(canvas, Offset(0.0, _verticalPadding));
-
-    canvas.restore();
-  }
-
-  // ── Intrinsic sizes ──────────────────────────────
-
-  @override
-  double computeMinIntrinsicHeight(double width) {
-    _painter.layout(maxWidth: width.isFinite ? width : 9999.0);
-    return (_painter.height + _verticalPadding * 2) * _scale;
-  }
-
-  @override
-  double computeMaxIntrinsicHeight(double width) =>
-      computeMinIntrinsicHeight(width);
-
-  @override
-  double computeMinIntrinsicWidth(double height) => 0.0;
-
-  @override
-  double computeMaxIntrinsicWidth(double height) => _kBaseFontSize * 20;
-
-  @override
-  bool hitTestSelf(Offset position) => true;
 }
 
 // ═══════════════════════════════════════════════════════════════
