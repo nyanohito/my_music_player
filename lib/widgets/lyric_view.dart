@@ -6,9 +6,15 @@ import '../models/lyric_line.dart';
 import '../providers/audio_player_provider.dart';
 import '../theme/app_theme.dart';
 
-const double _kHorizontalPadding  = 24.0;
-const Duration _kAnimDuration     = Duration(milliseconds: 400);
-const Curve _kAnimCurve           = Curves.easeInOutCubic;
+const double _kBaseFontSize = 32.0;
+const double _kHorizontalPadding = 24.0;
+const Duration _kAnimDuration = Duration(milliseconds: 400);
+const Curve _kAnimCurve = Curves.easeOutCubic;
+
+// スケール値（最大サイズ32.0に対する比率）
+const double _kScaleHighlighted = 1.0;
+const double _kScaleNear = 28.0 / 32.0;
+const double _kScaleNormal = 24.0 / 32.0;
 
 enum _LyricLineState { highlighted, near, normal }
 
@@ -105,9 +111,6 @@ class _LyricViewState extends ConsumerState<LyricView> {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// LYRIC LINE ITEM (完全に標準ウィジェットのみで構成)
-// ═══════════════════════════════════════════════════════════════
 class _LyricLineItem extends StatelessWidget {
   const _LyricLineItem({
     required this.lyricLine,
@@ -126,48 +129,58 @@ class _LyricLineItem extends StatelessWidget {
     final isHigh = state == _LyricLineState.highlighted;
     final isNear = state == _LyricLineState.near;
 
-    // Spotify風のフォントサイズと不透明度を直接定義
-    final double targetFontSize = isHigh ? 32.0 : (isNear ? 28.0 : 24.0);
-    final double targetOpacity  = isHigh ? 1.00 : (isNear ? 0.55 : 0.38);
-    final double targetVertPad  = isHigh ? 16.0 : 8.0;
+    final double targetScale   = isHigh ? _kScaleHighlighted : (isNear ? _kScaleNear : _kScaleNormal);
+    final double targetOpacity = isHigh ? 1.00 : (isNear ? 0.55 : 0.38);
+    final double targetVertPad = isHigh ? 16.0 : 8.0;
 
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      // ① 余白のアニメーション
       child: AnimatedPadding(
         duration: _kAnimDuration,
         curve: _kAnimCurve,
         padding: EdgeInsets.symmetric(vertical: targetVertPad),
-        // ② フォントサイズと色のアニメーション（Flutterの正攻法）
-        child: AnimatedDefaultTextStyle(
+        // TweenAnimationBuilderを使ってスケールと透明度を滑らかにアニメーション
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: targetScale, end: targetScale),
           duration: _kAnimDuration,
           curve: _kAnimCurve,
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: targetOpacity),
-            fontSize: targetFontSize,
-            fontWeight: FontWeight.w800,
-            height: 1.5, // ゆったりした行間
-            letterSpacing: -0.3,
-            shadows: isHigh
-                ? [Shadow(color: Colors.white.withValues(alpha: 0.3), blurRadius: 16)]
-                : const [],
-          ),
-          // ③ Containerで横幅を確保し、絶対に左揃え（centerLeft）を維持する
-          child: Container(
-            width: double.infinity,
-            alignment: Alignment.centerLeft,
-            child: Text(text),
-          ),
+          builder: (context, scale, child) {
+            return TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: targetOpacity, end: targetOpacity),
+              duration: _kAnimDuration,
+              curve: _kAnimCurve,
+              builder: (context, opacity, child) {
+                return Opacity(
+                  opacity: opacity,
+                  // Scaleを左上を基準にかけることで、左揃えを維持
+                  child: Transform.scale(
+                    scale: scale,
+                    alignment: Alignment.centerLeft,
+                    child: child,
+                  ),
+                );
+              },
+              // 実際のテキストは常に最大サイズ(32.0)でレイアウトされるため、アニメーション中に改行位置が変わらない
+              child: Text(
+                text,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: _kBaseFontSize,
+                  fontWeight: FontWeight.w800,
+                  height: 1.5, // ゆったりした行間
+                  letterSpacing: -0.3,
+                ),
+                textAlign: TextAlign.left,
+              ),
+            );
+          },
         ),
       ),
     );
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// EMPTY STATE
-// ═══════════════════════════════════════════════════════════════
 class _EmptyLyricView extends StatelessWidget {
   const _EmptyLyricView();
 
