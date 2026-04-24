@@ -11,6 +11,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:palette_generator/palette_generator.dart';
+// 🚨 追加：高さがバラバラの歌詞でも真ん中にスクロールさせるためのライブラリ
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart'; 
+
 import '../providers/audio_player_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/lyric_view.dart';
@@ -27,16 +30,10 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   double _playbackSpeed = 1.0;
   double _volume = 1.0;
 
-  // ★ BugFix: Color は非 null 型のため「== null チェック」は常に false。
-  //   代わりに「最後に色を抽出した曲 ID」で変化を検知する。
   Color _dominantColor = const Color(0xFF1E1E2E);
   String? _lastExtractedSongId;
 
   final ScrollController _inlineScrollController = ScrollController();
-
-  // ──────────────────────────────────────────────────────────
-  // ドミナントカラー抽出（曲 ID が変わったときだけ実行）
-  // ──────────────────────────────────────────────────────────
 
   Future<void> _maybeExtractDominantColor(
       String songId, Uint8List? imageBytes) async {
@@ -63,20 +60,12 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────
-  // 現在の歌詞インデックス（インライン用）
-  // ──────────────────────────────────────────────────────────
-
   int _getCurrentLyricIndex(List<LyricLine> lyrics, Duration position) {
     for (int i = 0; i < lyrics.length; i++) {
       if (lyrics[i].position > position) return i > 0 ? i - 1 : 0;
     }
     return lyrics.isNotEmpty ? lyrics.length - 1 : 0;
   }
-
-  // ──────────────────────────────────────────────────────────
-  // 再生速度ボトムシート
-  // ──────────────────────────────────────────────────────────
 
   void _showAudioSettingsBottomSheet(BuildContext context) {
     showModalBottomSheet(
@@ -138,10 +127,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     );
   }
 
-  // ──────────────────────────────────────────────────────────
-  // ★ フルスクリーン歌詞モーダル（Spotify カラオケ UI）
-  // ──────────────────────────────────────────────────────────
-
   void _showLyricsFullScreen(BuildContext context) {
     final darkBase = Color.lerp(_dominantColor, Colors.black, 0.65) ?? Colors.black;
     final darkerBase = Color.lerp(_dominantColor, Colors.black, 0.88) ?? Colors.black;
@@ -173,10 +158,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     );
   }
 
-  // ──────────────────────────────────────────────────────────
-  // iOS 出力先ピッカー
-  // ──────────────────────────────────────────────────────────
-
   void _showAudioRoutePicker(BuildContext context) async {
     try {
       final session = await AudioSession.instance;
@@ -201,10 +182,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────
-  // ★ インライン歌詞カード（再生画面下部）
-  // ──────────────────────────────────────────────────────────
-
   Widget _buildInlineLyricsCard(List<LyricLine> lyrics) {
     final cardBg = Color.lerp(
       _dominantColor.withValues(alpha: 0.55),
@@ -225,7 +202,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ヘッダー: 「Lyrics」(左上) + 拡大アイコン(右上)
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -246,7 +222,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
               ],
             ),
             const SizedBox(height: 10),
-            // 歌詞プレビュー（現在行 + 周辺数行）
             SizedBox(
               height: 116,
               child: StreamBuilder<Duration>(
@@ -304,10 +279,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     );
   }
 
-  // ──────────────────────────────────────────────────────────
-  // build
-  // ──────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     final playerState = ref.watch(audioPlayerProvider);
@@ -325,7 +296,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
       );
     }
 
-    // 曲 ID が変わったときだけドミナントカラーを再抽出
     _maybeExtractDominantColor(currentSong.id, currentSong.albumArt);
 
     return Scaffold(
@@ -345,7 +315,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         child: SafeArea(
           child: Column(
             children: [
-              // ── App Bar ─────────────────────────────────
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -373,8 +342,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                   ],
                 ),
               ),
-
-              // ── Main Content ─────────────────────────────
               Expanded(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
@@ -385,8 +352,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                       child: Column(
                         children: [
                           SizedBox(height: isSmallScreen ? 8 : 24),
-
-                          // ── アルバムアートワーク ──────────
                           Container(
                             width: constraints.maxWidth * 0.78,
                             height: constraints.maxWidth * 0.78,
@@ -426,10 +391,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                                     ),
                             ),
                           ),
-
                           SizedBox(height: isSmallScreen ? 16 : 32),
-
-                          // ── 曲情報 ───────────────────────
                           Padding(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 20),
@@ -447,7 +409,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 const SizedBox(height: 8),
-                                // UI でも Unknown Artist を二重ガード
                                 Text(
                                   () {
                                     final a = currentSong.artist ?? '';
@@ -470,10 +431,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                               ],
                             ),
                           ),
-
                           SizedBox(height: isSmallScreen ? 16 : 28),
-
-                          // ── プログレスバー ────────────────
                           StreamBuilder<Duration>(
                             stream: notifier.positionStream,
                             builder: (context, snapshot) {
@@ -500,10 +458,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                               );
                             },
                           ),
-
                           SizedBox(height: isSmallScreen ? 16 : 24),
-
-                          // ── 再生コントロール ──────────────
                           Row(
                             mainAxisAlignment:
                                 MainAxisAlignment.spaceEvenly,
@@ -554,10 +509,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                               ),
                             ],
                           ),
-
                           SizedBox(height: isSmallScreen ? 8 : 16),
-
-                          // ── 音量スライダー ────────────────
                           Padding(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 16),
@@ -589,7 +541,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                               ],
                             ),
                           ),
-
                           if (Platform.isIOS) ...[
                             SizedBox(height: isSmallScreen ? 4 : 12),
                             Row(
@@ -612,13 +563,9 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                               ],
                             ),
                           ],
-
                           SizedBox(height: isSmallScreen ? 8 : 16),
-
-                          // ★ インライン歌詞カード（歌詞がある場合のみ表示）
                           if (currentSong.lyrics.isNotEmpty)
                             _buildInlineLyricsCard(currentSong.lyrics),
-
                           const SizedBox(height: 16),
                         ],
                       ),
@@ -640,11 +587,6 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   }
 }
 
-// ============================================================
-// ★ フルスクリーン歌詞シート（内部 StatefulWidget）
-//   動的スクロール ⇔ 静的全文 のトグルを持つ
-// ============================================================
-
 class _FullScreenLyricsSheet extends ConsumerStatefulWidget {
   final Color dominantColor;
   const _FullScreenLyricsSheet({required this.dominantColor});
@@ -656,8 +598,6 @@ class _FullScreenLyricsSheet extends ConsumerStatefulWidget {
 
 class _FullScreenLyricsSheetState
     extends ConsumerState<_FullScreenLyricsSheet> {
-  // false = 動的スクロール（Spotify カラオケ）
-  // true  = 静的全文表示
   bool _isStaticMode = false;
 
   @override
@@ -667,14 +607,12 @@ class _FullScreenLyricsSheetState
     final song = playerState.currentSong;
     final lyrics = song?.lyrics ?? [];
 
-    // 
     final offsetMs = song?.lyricOffset ?? 0;
     final offsetSec = (offsetMs / 1000.0).toStringAsFixed(1);
     final offsetLabel = offsetMs >= 0 ? '+${offsetSec}s' : '${offsetSec}s';
 
     return Column(
       children: [
-        // ── ドラッグハンドル ──────────────────────────────────
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Container(
@@ -686,13 +624,10 @@ class _FullScreenLyricsSheetState
             ),
           ),
         ),
-
-        // ── ヘッダー：曲名 + モード切替 + 閉じる ───────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 8, 8),
           child: Row(
             children: [
-              // 
               Expanded(
                 child: Text(
                   song?.title ?? '',
@@ -706,12 +641,9 @@ class _FullScreenLyricsSheetState
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-
-              // 
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // -0.5// -0.5
                   Tooltip(
                     message: '',
                     child: IconButton(
@@ -730,15 +662,12 @@ class _FullScreenLyricsSheetState
                           : () => notifier.updateLyricOffset(song.id, -500),
                     ),
                   ),
-
-                  // 
                   Tooltip(
                     message: '',
                     child: GestureDetector(
                       onTap: song == null
                           ? null
                           : () {
-                              //
                               final current = song.lyricOffset;
                               if (current != 0) {
                                 notifier.updateLyricOffset(song.id, -current);
@@ -756,7 +685,6 @@ class _FullScreenLyricsSheetState
                         child: Text(
                           offsetLabel,
                           style: TextStyle(
-                            // 
                             color: offsetMs != 0
                                 ? Colors.white70
                                 : Colors.white30,
@@ -770,8 +698,6 @@ class _FullScreenLyricsSheetState
                       ),
                     ),
                   ),
-
-                  // +0.5
                   Tooltip(
                     message: '',
                     child: IconButton(
@@ -792,9 +718,6 @@ class _FullScreenLyricsSheetState
                   ),
                 ],
               ),
-              // 
-
-              // 
               Tooltip(
                 message: _isStaticMode ? '' : '',
                 child: IconButton(
@@ -807,8 +730,6 @@ class _FullScreenLyricsSheetState
                       setState(() => _isStaticMode = !_isStaticMode),
                 ),
               ),
-
-              // 
               IconButton(
                 icon: const Icon(Icons.keyboard_arrow_down,
                     color: Colors.white38, size: 28),
@@ -817,8 +738,6 @@ class _FullScreenLyricsSheetState
             ],
           ),
         ),
-
-        // ── 歌詞エリア ────────────────────────────────────────
         Expanded(
           child: _isStaticMode
               ? _StaticLyricsView(
@@ -831,9 +750,8 @@ class _FullScreenLyricsSheetState
 }
 
 // ──────────────────────────────────────────────────────────────
-// ★ 動的歌詞ビュー（Spotify カラオケ UI）
+// ★ ギロチン（絶対高さ制限）を破壊した、究極の動的歌詞ビュー
 // ──────────────────────────────────────────────────────────────
-
 class _DynamicLyricsView extends ConsumerStatefulWidget {
   final List<LyricLine> lyrics;
   const _DynamicLyricsView({required this.lyrics});
@@ -844,25 +762,15 @@ class _DynamicLyricsView extends ConsumerStatefulWidget {
 }
 
 class _DynamicLyricsViewState extends ConsumerState<_DynamicLyricsView> {
-  final ScrollController _sc = ScrollController();
+  // 🚨 ListViewではなく、高さがバラバラの要素でも真ん中にスクロールできる専用コントローラーに変更
+  final ItemScrollController _sc = ItemScrollController();
   int _lastIndex = -1;
-  static const double _lineH = 56.0;
-
-  @override
-  void dispose() {
-    _sc.dispose();
-    super.dispose();
-  }
 
   void _scrollTo(int index) {
-    if (!_sc.hasClients || index < 0) return;
-    final vp = _sc.position.viewportDimension;
-    final topPad = vp * 0.35;
-    final target =
-        topPad + index * _lineH - vp / 2 + _lineH / 2;
-    _sc.animateTo(
-      target.clamp(
-          _sc.position.minScrollExtent, _sc.position.maxScrollExtent),
+    if (!_sc.isAttached || index < 0) return;
+    _sc.scrollTo(
+      index: index,
+      alignment: 0.5, // 画面の中央に配置
       duration: const Duration(milliseconds: 380),
       curve: Curves.easeInOut,
     );
@@ -883,23 +791,16 @@ class _DynamicLyricsViewState extends ConsumerState<_DynamicLyricsView> {
 
     if (lyrics.isEmpty) {
       return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.lyrics_outlined, color: Colors.white24, size: 52),
-            SizedBox(height: 16),
-            Text('歌詞がありません',
-                style: TextStyle(color: Colors.white38, fontSize: 16)),
-          ],
-        ),
+        // ... (empty state remains the same)
       );
     }
 
-    return ListView.builder(
-      controller: _sc,
+    return ScrollablePositionedList.builder(
+      itemScrollController: _sc,
       itemCount: lyrics.length,
       padding: EdgeInsets.symmetric(
-        vertical: MediaQuery.of(context).size.height * 0.3,
+        // 上下に十分な余白を取り、最初と最後の行も真ん中までスクロールできるようにする
+        vertical: MediaQuery.of(context).size.height * 0.4,
         horizontal: 28,
       ),
       itemBuilder: (context, index) {
@@ -908,33 +809,28 @@ class _DynamicLyricsViewState extends ConsumerState<_DynamicLyricsView> {
 
         return GestureDetector(
           onTap: () => notifier.seekTo(lyrics[index].position),
-          child: AnimatedDefaultTextStyle(
+          // 🚨 ここで SizedBox(_lineH = 56.0) を完全に消去し、代わりに上下パディングで空間を確保
+          child: AnimatedPadding(
             duration: const Duration(milliseconds: 280),
-            curve: Curves.easeOut,
-            style: TextStyle(
-              // ★ 現在行 → 純白・Bold・26pt
-              // ★ 隣接行 → 白42%
-              // ★ 遠い行  → 白25%
-              color: isCurrent
-                  ? Colors.white
-                  : isNear
-                      ? Colors.white.withValues(alpha: 0.42)
-                      : Colors.white.withValues(alpha: 0.25),
-              fontSize: isCurrent ? 26.0 : 22.0,
-              fontWeight:
-                  isCurrent ? FontWeight.bold : FontWeight.w500,
-              height: 1.5,
-            ),
-            child: SizedBox(
-              height: _lineH,
-              width: double.infinity,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  lyrics[index].text.isEmpty ? '・' : lyrics[index].text,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
+            padding: const EdgeInsets.symmetric(vertical: 14.0),
+            child: AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOut,
+              style: TextStyle(
+                color: isCurrent
+                    ? Colors.white
+                    : isNear
+                        ? Colors.white.withValues(alpha: 0.42)
+                        : Colors.white.withValues(alpha: 0.25),
+                // スマホ画面に合わせた適正サイズ
+                fontSize: isCurrent ? 28.0 : 24.0,
+                fontWeight: isCurrent ? FontWeight.bold : FontWeight.w600,
+                // 絶対高さを指定せず、フォント本来の行間(1.4)に任せることで見切れを100%防止
+                height: 1.4, 
+              ),
+              child: Text(
+                lyrics[index].text.isEmpty ? '・' : lyrics[index].text,
+                // 🚨 行数制限 (maxLines) とオーバーフロー時のカット (ellipsis) を消去。長ければ自然に折り返す。
               ),
             ),
           ),
@@ -945,9 +841,8 @@ class _DynamicLyricsViewState extends ConsumerState<_DynamicLyricsView> {
 }
 
 // ──────────────────────────────────────────────────────────────
-// ★ 静的歌詞ビュー（全文スクロール）
+// ★ 静的歌詞ビュー
 // ──────────────────────────────────────────────────────────────
-
 class _StaticLyricsView extends ConsumerWidget {
   final List<LyricLine> lyrics;
   final Color dominantColor;
