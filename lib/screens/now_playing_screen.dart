@@ -247,7 +247,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                     controller: _inlineScrollController,
                     physics: const NeverScrollableScrollPhysics(),
                     itemCount: lyrics.length,
-                    itemExtent: 29,
+                    // [修正] 29 → 38: height:1.9 × fontSize:15 = 28.5 + 余裕
+                    itemExtent: 38,
                     itemBuilder: (context, index) {
                       if (index < ci - 1 || index > ci + 2) {
                         return const SizedBox.shrink();
@@ -263,7 +264,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                           fontWeight: isCurrent
                               ? FontWeight.bold
                               : FontWeight.normal,
-                          height: 1.3,
+                          // [修正] 1.3 → 1.9: iOS Hiragino Sans のディセンダー保護
+                          height: 1.9,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -809,10 +811,13 @@ class _DynamicLyricsViewState extends ConsumerState<_DynamicLyricsView> {
 
         return GestureDetector(
           onTap: () => notifier.seekTo(lyrics[index].position),
-          // 🚨 ここで SizedBox(_lineH = 56.0) を完全に消去し、代わりに上下パディングで空間を確保
+          // [修正] padding を isCurrent で変化させてアニメーションを機能させる
           child: AnimatedPadding(
             duration: const Duration(milliseconds: 280),
-            padding: const EdgeInsets.symmetric(vertical: 14.0),
+            padding: EdgeInsets.only(
+              top: isCurrent ? 16.0 : 10.0,
+              bottom: isCurrent ? 16.0 : 10.0,
+            ),
             child: AnimatedDefaultTextStyle(
               duration: const Duration(milliseconds: 280),
               curve: Curves.easeOut,
@@ -825,8 +830,8 @@ class _DynamicLyricsViewState extends ConsumerState<_DynamicLyricsView> {
                 // スマホ画面に合わせた適正サイズ
                 fontSize: isCurrent ? 28.0 : 24.0,
                 fontWeight: isCurrent ? FontWeight.bold : FontWeight.w600,
-                // 絶対高さを指定せず、フォント本来の行間(1.4)に任せることで見切れを100%防止
-                height: 1.4, 
+                // [修正] 1.4 → 1.9: iOS Hiragino Sans ディセンダー保護
+                height: 1.9,
               ),
               child: Text(
                 lyrics[index].text.isEmpty ? '・' : lyrics[index].text,
