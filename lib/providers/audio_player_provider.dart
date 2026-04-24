@@ -556,6 +556,9 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
+  // =========================================================
+  // フォルダごと一括追加（メモリを爆発させない「最強のアプリ」仕様）
+  // =========================================================
   Future<int> pickAndLoadFolder() async {
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -596,6 +599,9 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }
       }
       
+      // 🚨 メモリ管理用のカウンターを追加
+      int processedCount = 0;
+
       for (final entry in groupedFiles.entries) {
         final files = entry.value;
         PlatformFile? audioFile;
@@ -611,33 +617,45 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }
         
         if (audioFile != null && audioFile.path != null) {
-          // ★ Fix 1適用: コピー先フルパスでメタデータ抽出・アートワーク抽出
-          final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
-          final audioFullPath = await _getFullPath(audioFileName);
-          
-          var song = await _createSongFromMetadata(audioFullPath);
-          
-          final albumArt = await _extractAlbumArt(audioFullPath);
-          if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
-          
-          if (lrcFile != null && lrcFile.path != null) {
-            // ★ Fix 1適用: LRCもバイナリコピーしてローカルに保存
-            final lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
-            final lrcFullPath = await _getFullPath(lrcFileName);
-            final lyrics = await _parseLrcFile(lrcFullPath);
+          try { // 🚨 1曲の処理エラーで全体を止めないための try-catch
+            // ★ Fix 1適用: コピー先フルパスでメタデータ抽出・アートワーク抽出
+            final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
+            final audioFullPath = await _getFullPath(audioFileName);
+            
+            var song = await _createSongFromMetadata(audioFullPath);
+            
+            final albumArt = await _extractAlbumArt(audioFullPath);
+            if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
+            
+            if (lrcFile != null && lrcFile.path != null) {
+              // ★ Fix 1適用: LRCもバイナリコピーしてローカルに保存
+              final lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
+              final lrcFullPath = await _getFullPath(lrcFileName);
+              final lyrics = await _parseLrcFile(lrcFullPath);
+              song = song.copyWith(
+                lrcPath: lrcFileName, // ★ Fix 2: コピー済みファイル名のみを設定
+                lyrics: lyrics,
+              );
+            }
+            
+            // ★ Fix 2: DB保存直前に絶対パスを物理ブロック — ファイル名のみに強制クレンジング
             song = song.copyWith(
-              lrcPath: lrcFileName, // ★ Fix 2: コピー済みファイル名のみを設定
-              lyrics: lyrics,
+              filePath: song.filePath.split('/').last,
+              lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
             );
+            await _dbHelper.insertOrUpdateSong(song);
+            newSongs.add(song);
+
+            // 🚨 ここがメモリ爆発を防ぐ最強の魔法！
+            processedCount++;
+            if (processedCount % 10 == 0) {
+              // 10曲処理するごとに50ミリ秒休憩し、メモリのゴミ(不要になった画像データ等)を回収させます
+              await Future.delayed(const Duration(milliseconds: 50));
+            }
+          } catch (e) {
+            print('Error processing file ${audioFile.path}: $e');
+            continue; // エラーがあっても次の曲へ進む
           }
-          
-          // ★ Fix 2: DB保存直前に絶対パスを物理ブロック — ファイル名のみに強制クレンジング
-          song = song.copyWith(
-            filePath: song.filePath.split('/').last,
-            lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
-          );
-          await _dbHelper.insertOrUpdateSong(song);
-          newSongs.add(song);
         }
       }
 
