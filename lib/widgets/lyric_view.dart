@@ -6,15 +6,9 @@ import '../models/lyric_line.dart';
 import '../providers/audio_player_provider.dart';
 import '../theme/app_theme.dart';
 
-const double _kBaseFontSize = 32.0;
-const double _kHorizontalPadding = 24.0;
-const Duration _kAnimDuration = Duration(milliseconds: 400);
-const Curve _kAnimCurve = Curves.easeOutCubic;
-
-// スケール値（最大サイズ32.0に対する比率）
-const double _kScaleHighlighted = 1.0;
-const double _kScaleNear = 28.0 / 32.0;
-const double _kScaleNormal = 24.0 / 32.0;
+const double _kHorizontalPadding  = 24.0;
+const Duration _kAnimDuration     = Duration(milliseconds: 400);
+const Curve _kAnimCurve           = Curves.easeOutCubic;
 
 enum _LyricLineState { highlighted, near, normal }
 
@@ -129,7 +123,8 @@ class _LyricLineItem extends StatelessWidget {
     final isHigh = state == _LyricLineState.highlighted;
     final isNear = state == _LyricLineState.near;
 
-    final double targetScale   = isHigh ? _kScaleHighlighted : (isNear ? _kScaleNear : _kScaleNormal);
+    // 32.0を基準(1.0)としてスケール比を計算
+    final double targetScale   = isHigh ? 1.0 : (isNear ? 28.0 / 32.0 : 24.0 / 32.0);
     final double targetOpacity = isHigh ? 1.00 : (isNear ? 0.55 : 0.38);
     final double targetVertPad = isHigh ? 16.0 : 8.0;
 
@@ -140,7 +135,6 @@ class _LyricLineItem extends StatelessWidget {
         duration: _kAnimDuration,
         curve: _kAnimCurve,
         padding: EdgeInsets.symmetric(vertical: targetVertPad),
-        // TweenAnimationBuilderを使ってスケールと透明度を滑らかにアニメーション
         child: TweenAnimationBuilder<double>(
           tween: Tween<double>(begin: targetScale, end: targetScale),
           duration: _kAnimDuration,
@@ -150,26 +144,30 @@ class _LyricLineItem extends StatelessWidget {
               tween: Tween<double>(begin: targetOpacity, end: targetOpacity),
               duration: _kAnimDuration,
               curve: _kAnimCurve,
-              builder: (context, opacity, child) {
+              builder: (context, opacity, innerChild) {
                 return Opacity(
                   opacity: opacity,
-                  // Scaleを左上を基準にかけることで、左揃えを維持
+                  // 🚨 ここが肝：見た目「だけ」を縮小する
                   child: Transform.scale(
                     scale: scale,
-                    alignment: Alignment.centerLeft,
-                    child: child,
+                    alignment: Alignment.centerLeft, // 左端を軸に拡大縮小
+                    child: innerChild,
                   ),
                 );
               },
-              // 実際のテキストは常に最大サイズ(32.0)でレイアウトされるため、アニメーション中に改行位置が変わらない
+              // 🚨 実際のテキストは「常に最大サイズ（32.0）」で描画して枠を固定する
+              // これにより、アニメーション中に突然2行に折れ曲がってクリップされる現象が物理的に消滅します
               child: Text(
                 text,
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white,
-                  fontSize: _kBaseFontSize,
+                  fontSize: 32.0, // ← ここが固定されていることが極めて重要！
                   fontWeight: FontWeight.w800,
-                  height: 1.5, // ゆったりした行間
+                  height: 1.5,
                   letterSpacing: -0.3,
+                  shadows: isHigh
+                      ? [Shadow(color: Colors.white.withValues(alpha: 0.3), blurRadius: 16)]
+                      : const [],
                 ),
                 textAlign: TextAlign.left,
               ),
