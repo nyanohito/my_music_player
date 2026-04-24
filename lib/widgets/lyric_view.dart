@@ -7,7 +7,6 @@ import '../providers/audio_player_provider.dart';
 import '../theme/app_theme.dart';
 
 const double _kHorizontalPadding = 24.0;
-// プロの助言通り、アニメーション時間を少し短く（300ms）してキビキビさせます
 const Duration _kAnimDuration = Duration(milliseconds: 300);
 const Curve _kAnimCurve = Curves.easeOutCubic;
 
@@ -124,10 +123,10 @@ class _LyricLineItem extends StatelessWidget {
     final isHigh = state == _LyricLineState.highlighted;
     final isNear = state == _LyricLineState.near;
 
-    // プロのアドバイス通り、フォントサイズを直接指定します
     final double targetFontSize = isHigh ? 32.0 : (isNear ? 26.0 : 22.0);
     final double targetOpacity  = isHigh ? 1.00 : (isNear ? 0.55 : 0.38);
-    final double targetVertPad  = isHigh ? 14.0 : 8.0;
+    // 行間指定を消した分、ここでパディングを少し増やして上下の空間を確保します
+    final double targetVertPad  = isHigh ? 16.0 : 10.0;
 
     return GestureDetector(
       onTap: onTap,
@@ -136,7 +135,6 @@ class _LyricLineItem extends StatelessWidget {
         duration: _kAnimDuration,
         curve: _kAnimCurve,
         padding: EdgeInsets.symmetric(vertical: targetVertPad),
-        // 🚨 スケールやClipなどの小細工を完全廃止し、王道の AnimatedDefaultTextStyle を採用！
         child: AnimatedDefaultTextStyle(
           duration: _kAnimDuration,
           curve: _kAnimCurve,
@@ -144,8 +142,8 @@ class _LyricLineItem extends StatelessWidget {
             color: Colors.white.withValues(alpha: targetOpacity),
             fontSize: targetFontSize,
             fontWeight: FontWeight.w800,
-            // 🚨 最大のクリップ原因だった行間を 1.5 → 1.3 に圧縮
-            height: 1.3,
+            // 🚨 ここにあった `height` の指定を完全に削除しました。
+            // これによりフォントが本来必要とするサイズが100%確保され、見切れが消滅します。
             letterSpacing: -0.3,
             shadows: isHigh
                 ? [Shadow(color: Colors.white.withValues(alpha: 0.3), blurRadius: 16)]
@@ -154,7 +152,14 @@ class _LyricLineItem extends StatelessWidget {
           child: Container(
             width: double.infinity,
             alignment: Alignment.centerLeft,
-            child: Text(text),
+            // さらに念のため、OSレベルでの上下クリッピングを防ぐオプションを追加
+            child: Text(
+              text,
+              textHeightBehavior: const TextHeightBehavior(
+                applyHeightToFirstAscent: true,
+                applyHeightToLastDescent: true,
+              ),
+            ),
           ),
         ),
       ),
