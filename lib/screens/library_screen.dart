@@ -135,7 +135,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             child: Row(
               children: [
                 ChoiceChip(
-                  label: const Text(''),
+                  label: const Text('すべて'),
                   selected: _filterMode == FilterMode.all,
                   onSelected: (selected) {
                     if (selected) setState(() => _filterMode = FilterMode.all);
@@ -152,7 +152,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 ),
                 const SizedBox(width: 8),
                 ChoiceChip(
-                  label: const Text(''),
+                  label: const Text('お気に入り'),
                   selected: _filterMode == FilterMode.favorites,
                   onSelected: (selected) {
                     if (selected) setState(() => _filterMode = FilterMode.favorites);
@@ -169,7 +169,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 ),
                 const SizedBox(width: 8),
                 ChoiceChip(
-                  label: const Text(''),
+                  label: const Text('プレイリスト'),
                   selected: _filterMode == FilterMode.playlists,
                   onSelected: (selected) {
                     if (selected) setState(() => _filterMode = FilterMode.playlists);
@@ -188,7 +188,25 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             ),
           ),
 
-          const SizedBox(height: 8),
+          // ▼ === 追加：曲数・プレイリスト数の表示 === ▼
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 4.0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _filterMode == FilterMode.playlists
+                    ? '${playerState.playlists.length} プレイリスト'
+                    : '${displaySongs.length} 曲',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          // ▲ =================================== ▲
 
           Expanded(
             child: _filterMode == FilterMode.playlists
