@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+    # ↓ ここから追加
+  flutter_launcher_icons: ^0.13.1
 
   # ── 音声再生コア ──────────────────────────────────────────
   # バックグラウンド再生・Bluetooth対応の音声プレイヤー
@@ -68,3 +70,9 @@ flutter:
   uses-material-design: true
   # assets:
   #   - assets/images/  ← アルバムアートのデフォルト画像などを後で追加
+
+# ↓ ファイルの一番下あたりにこれを追加
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon.png"

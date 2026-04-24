@@ -22,7 +22,6 @@ const double _kHorizontalPadding = 24.0;
 const Duration _kAnimDuration = Duration(milliseconds: 400);
 const Curve    _kAnimCurve    = Curves.easeInOutCubic;
 
-// 🚨 修正箇所：fontWeight を w800 に統一し、実際の描画と完全に一致させました
 const TextStyle _kMeasureStyle = TextStyle(
   fontSize:      _kBaseFontSize,
   fontWeight:    FontWeight.w800, 
@@ -150,6 +149,7 @@ class _LyricLineItemState extends State<_LyricLineItem> {
       textDirection:  TextDirection.ltr,
       textAlign:      TextAlign.left,
       textWidthBasis: TextWidthBasis.parent,
+      textScaler:     TextScaler.noScaling, // 🚨 iPhoneの文字サイズ設定を無視する
     )..layout(maxWidth: maxWidth);
 
     _cachedWidth   = maxWidth;
@@ -267,11 +267,11 @@ class _AnimatedLyricBoxState
 
     return SizedBox(
       height: rawH * scale,
-      // 念のため ClipRect を外して、はみ出しを許容する構造にしています
       child: OverflowBox(
         alignment: Alignment.topLeft,
         minHeight: 0,
-        maxHeight: rawH,
+        // 🚨 究極の修正：高さを「無制限(double.infinity)」にして絶対に切らない！
+        maxHeight: double.infinity, 
         minWidth:  0,
         maxWidth:  widget.availableWidth,
         child: Transform.scale(
@@ -279,16 +279,18 @@ class _AnimatedLyricBoxState
           alignment: Alignment.topLeft,
           child: SizedBox(
             width:  widget.availableWidth,
-            height: rawH,
+            // 🚨 ここにあった height: rawH も削除し、テキスト自身の自然な高さに任せます
             child: Padding(
               padding: EdgeInsets.symmetric(vertical: vertPad),
               child: RichText(
+                // 🚨 iPhoneの「文字を大きくする」設定などでレイアウトが崩れるのを防ぐ
+                textScaler: TextScaler.noScaling,
                 text: TextSpan(
                   text:  widget.text,
                   style: TextStyle(
                     color:         Colors.white.withValues(alpha: opacity),
                     fontSize:      _kBaseFontSize, 
-                    fontWeight:    FontWeight.w800, // 計算用の _kMeasureStyle と一致！
+                    fontWeight:    FontWeight.w800,
                     height:        1.5,
                     letterSpacing: -0.3,
                     shadows: glowT > 0.05
