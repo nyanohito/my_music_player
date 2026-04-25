@@ -39,7 +39,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final playlist = playerState.playlist;
     final currentSongIndex = playerState.currentSongIndex;
 
-    // 
     ref.listen<AudioPlayerState>(audioPlayerProvider, (previous, next) {
       if (next.errorMessage != null && next.errorMessage != previous?.errorMessage) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -64,8 +63,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         return true;
       }).toList();
       
-      // タイトル名でソート（A-Z/あいうえお順）
-      displaySongs.sort((a, b) => a.title.compareTo(b.title));
+      // 🚨 修正1：大文字・小文字を区別せず、純粋なアルファベット順に並び替え
+      displaySongs.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
     }
 
     return Scaffold(
@@ -188,7 +187,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             ),
           ),
 
-          // ▼ === 追加：曲数・プレイリスト数の表示 === ▼
+          // 曲数・プレイリスト数の表示
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 4.0),
             child: Align(
@@ -206,12 +205,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             ),
           ),
           const SizedBox(height: 4),
-          // ▲ =================================== ▲
 
           Expanded(
             child: _filterMode == FilterMode.playlists
                 ? PlaylistGridView(
-                    playlists: playerState.playlists,
+                    // 🚨 修正2：プレイリストも名前順（大文字小文字無視）に並び替える
+                    playlists: [...playerState.playlists]..sort((a, b) => 
+                        (a['name'] as String? ?? '').toLowerCase().compareTo((b['name'] as String? ?? '').toLowerCase())),
                     onPlaylistTap: (playlist) {
                       Navigator.push(
                         context,
@@ -334,6 +334,40 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            
+            // 🚨 ここにPCからの最強スキャンボタンを追加しました！
+            ListTile(
+              leading: const Icon(
+                Icons.sync_rounded,
+                color: AppColors.accent,
+                size: 24,
+              ),
+              title: const Text(
+                'PCから転送した曲をスキャン',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              subtitle: const Text(
+                'iTunes経由で入れた曲を読み込みます',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              ),
+              onTap: () async {
+                Navigator.pop(context);
+                final addedCount = await notifier.scanLocalDocuments();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(addedCount > 0 ? '$addedCount曲を新しくスキャンしました' : '新しい曲は見つかりませんでした'),
+                      backgroundColor: AppColors.accent,
+                    ),
+                  );
+                }
+              },
+            ),
+
             ListTile(
               leading: const Icon(
                 Icons.music_note,
@@ -516,14 +550,16 @@ class _PlaylistViewWithMenu extends ConsumerWidget {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  Text(
-                    song.artist,
-                    style: TextStyle(
-                      color: Colors.grey.withValues(alpha: 0.7),
-                      fontSize: 13,
+                  Expanded(
+                    child: Text(
+                      song.artist,
+                      style: TextStyle(
+                        color: Colors.grey.withValues(alpha: 0.7),
+                        fontSize: 13,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
                   if (song.lyrics.isNotEmpty) ...[
                     const SizedBox(width: 8),
@@ -577,33 +613,29 @@ class _PlaylistViewWithMenu extends ConsumerWidget {
                   } else if (value == 'add_to_playlist') {
                     onAddToPlaylist(song);
                   } else if (value == 'add_lyrics') {
-                    _pickAndAttachLrcFile(context, ref, song); // ✅ context, ref, song の順
+                    _pickAndAttachLrcFile(context, ref, song);
+                  } else if (value == 'info') {
+                    SongInfoSheet.show(context, song);
                   }
                 },
                 itemBuilder: (context) => [
+                  PopupMenuItem<String>(
+                    value: 'info',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline, color: AppColors.textPrimary, size: 20),
+                        const SizedBox(width: 12),
+                        const Text('曲情報', style: TextStyle(color: AppColors.textPrimary)),
+                      ],
+                    ),
+                  ),
                   PopupMenuItem<String>(
                     value: 'add_lyrics',
                     child: Row(
                       children: [
                         const Icon(Icons.lyrics_rounded, color: AppColors.accent, size: 20),
                         const SizedBox(width: 12),
-                        const Text(
-                          '歌詞ファイルを登録(.lrc)',
-                          style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w500),
-                        ),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem<String>(
-                    value: 'delete',
-                    child: Row(
-                      children: [
-                        const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                        const SizedBox(width: 12),
-                        const Text(
-                          'ライブラリから削除',
-                          style: TextStyle(color: Colors.red, fontWeight: FontWeight.w500),
-                        ),
+                        const Text('歌詞ファイルを登録(.lrc)', style: TextStyle(color: AppColors.textPrimary)),
                       ],
                     ),
                   ),
@@ -613,10 +645,17 @@ class _PlaylistViewWithMenu extends ConsumerWidget {
                       children: [
                         const Icon(Icons.playlist_add, color: AppColors.accent, size: 20),
                         const SizedBox(width: 12),
-                        const Text(
-                          'プレイリストに追加',
-                          style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w500),
-                        ),
+                        const Text('プレイリストに追加', style: TextStyle(color: AppColors.textPrimary)),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                        const SizedBox(width: 12),
+                        const Text('ライブラリから削除', style: TextStyle(color: Colors.red)),
                       ],
                     ),
                   ),
@@ -667,7 +706,7 @@ class _PlaylistViewWithMenu extends ConsumerWidget {
           final notifier = ref.read(audioPlayerProvider.notifier);
           await notifier.updateSongLrcPath(song.id, lrcPath);
 
-          if (context.mounted) { // ✅ mounted → context.mounted
+          if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text('歌詞ファイルを登録しました'),
@@ -678,7 +717,7 @@ class _PlaylistViewWithMenu extends ConsumerWidget {
         }
       }
     } catch (e) {
-      if (context.mounted) { // ✅ mounted → context.mounted
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('歌詞ファイルの登録に失敗しました: $e'),

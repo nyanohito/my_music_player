@@ -702,6 +702,121 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
+  // =========================================================
+  // iTunesファイル共有で直接PCから入れた曲をスキャンする最強の機能
+  // =========================================================
+  Future<int> scanLocalDocuments() async {
+    state = state.copyWith(isLoading: true);
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      // アプリ内に保存された全ファイルを一気に取得
+      final List<FileSystemEntity> entities = await appDir.list(recursive: true).toList();
+
+      final audioExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac'];
+      final List<File> audioFiles = [];
+      final Map<String, File> lrcFiles = {};
+
+      for (final entity in entities) {
+        if (entity is File) {
+          final ext = p.extension(entity.path).toLowerCase();
+          if (audioExtensions.contains(ext)) {
+            audioFiles.add(entity);
+          } else if (ext == '.lrc') {
+            // パス全体を鍵にするので、絶対に上書きバグが起きない
+            final key = entity.path.substring(0, entity.path.length - ext.length);
+            lrcFiles[key] = entity;
+          }
+        }
+      }
+
+      if (audioFiles.isEmpty) return 0;
+
+      // 既に登録済みのファイルをスキップするためのリスト
+      final existingSongs = await _dbHelper.getAllSongs();
+      final existingPaths = existingSongs.map((s) => s.filePath).toSet();
+
+      final List<Song> newSongs = [];
+      int processedCount = 0;
+
+      for (final file in audioFiles) {
+        final fileName = p.basename(file.path);
+
+        // 既にDBに存在する場合はスキップ（2重登録を防止）
+        if (existingPaths.contains(fileName)) continue;
+
+        try {
+          // FilePickerと違い、既にローカルにあるのでコピー不要！超高速で抽出！
+          var song = await _createSongFromMetadata(file.path);
+          final albumArt = await _extractAlbumArt(file.path);
+          if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
+
+          // LRCファイルの紐付け
+          final key = file.path.substring(0, file.path.length - p.extension(file.path).length);
+          if (lrcFiles.containsKey(key)) {
+            final lrcFile = lrcFiles[key]!;
+            final lyrics = await _parseLrcFile(lrcFile.path);
+            song = song.copyWith(
+              lrcPath: p.basename(lrcFile.path),
+              lyrics: lyrics,
+            );
+          }
+
+          song = song.copyWith(
+            filePath: fileName,
+            lrcPath: song.lrcPath != null ? p.basename(song.lrcPath!) : null,
+          );
+
+          await _dbHelper.insertOrUpdateSong(song);
+          newSongs.add(song);
+
+          processedCount++;
+          if (processedCount % 10 == 0) {
+            await Future.delayed(const Duration(milliseconds: 50)); // メモリの息継ぎ
+          }
+        } catch (e) {
+          print('Error scanning file ${file.path}: $e');
+          continue;
+        }
+      }
+
+      if (newSongs.isNotEmpty) {
+        final previousLength = state.playlist.length;
+        final allSongs = [...state.playlist, ...newSongs];
+        state = state.copyWith(playlist: allSongs);
+
+        if (_player.audioSource == null) {
+          final audioSources = <AudioSource>[];
+          for (final song in allSongs) {
+            final fullPath = await _getFullPath(song.filePath);
+            if (Platform.isAndroid || Platform.isIOS) {
+              String? artUri;
+              if (song.albumArt != null) {
+                artUri = Uri.dataFromBytes(song.albumArt!).toString();
+              }
+              audioSources.add(AudioSource.uri(
+                Uri.file(fullPath),
+                tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: artUri != null ? Uri.parse(artUri) : null),
+              ));
+            } else {
+              audioSources.add(LocalFileStreamAudioSource(fullPath));
+            }
+          }
+          final playlist = ConcatenatingAudioSource(children: audioSources);
+          await _player.setAudioSource(playlist, initialIndex: previousLength);
+          _player.play();
+        } else {
+          await _appendSongsToCurrentPlaylist(newSongs);
+        }
+      }
+      return newSongs.length;
+    } catch (e) {
+      state = state.copyWith(errorMessage: 'スキャンに失敗しました: $e');
+      return 0;
+    } finally {
+      state = state.copyWith(isLoading: false);
+    }
+  }
+
   Future<void> playSongAtIndex(int index) async {
     if (index < 0 || index >= state.playlist.length) return;
     
