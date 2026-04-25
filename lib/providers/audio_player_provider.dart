@@ -15,7 +15,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:metadata_god/metadata_god.dart'; // audiotags から変更
+import 'package:metadata_god/metadata_god.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/lyric_line.dart';
@@ -128,15 +128,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   Future<void> setPlaybackSpeed(double speed) async {
     try {
-      // For iOS, limit speed range to prevent audio distortion
       final safeSpeed = Platform.isIOS 
-          ? speed.clamp(0.5, 1.5) // Conservative range for iOS
-          : speed.clamp(0.5, 2.0); // Full range for Android
+          ? speed.clamp(0.5, 1.5) 
+          : speed.clamp(0.5, 2.0); 
       
-      // Disable pitch compensation on iOS to prevent stuttering
       if (Platform.isIOS) {
         await _player.setSpeed(safeSpeed);
-        // Ensure pitch is not changed when adjusting speed on iOS
         await _player.setPitch(1.0);
       } else {
         await _player.setSpeed(safeSpeed);
@@ -153,7 +150,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   StreamSubscription<Duration>? _positionSubscription;
 
-  /// Copy file to app's local directory and return the filename only
   Future<String> _copyFileToLocalDirectory(String sourcePath) async {
     final sourceFile = File(sourcePath);
     if (!await sourceFile.exists()) {
@@ -164,7 +160,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     final fileName = p.basename(sourcePath);
     final localPath = p.join(appDir.path, fileName);
     
-    // If file already exists, generate unique name
     final localFile = File(localPath);
     if (await localFile.exists()) {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -172,26 +167,23 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final extension = p.extension(localPath);
       final uniqueFileName = '${nameWithoutExt}_$timestamp$extension';
       final uniquePath = p.join(appDir.path, uniqueFileName);
-      // 
       await File(sourcePath).openRead().pipe(File(uniquePath).openWrite());
-      return uniqueFileName; // Return filename only
+      return uniqueFileName; 
     } else {
-      // 
       await File(sourcePath).openRead().pipe(File(localPath).openWrite());
-      return fileName; // Return filename only
+      return fileName; 
     }
   }
 
-  /// Get full absolute path from filename
   Future<String> _getFullPath(String fileName) async {
     final appDir = await getApplicationDocumentsDirectory();
     return p.join(appDir.path, fileName);
   }
+  
   StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
   StreamSubscription<int?>? _currentIndexSubscription;
 
-    
   AudioPlayer get player => _player;
 
   AudioPlayerNotifier() : super(const AudioPlayerState()) {
@@ -205,26 +197,16 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final savedSongs = await _dbHelper.getAllSongs();
       final playlists = await _dbHelper.getAllPlaylists();
 
-      // ★ 根本修正: state.playlist と ConcatenatingAudioSource を
-      //   「常に同じ曲・同じ順序」で構築する。
-      //   旧実装は state.playlist に全曲を入れた後で audioSources だけ欠損スキップ
-      //   していたためインデックスがずれ「追加直後 0:00/0:00」を引き起こしていた。
       final List<Song> validSongs = [];
       final List<AudioSource> audioSources = [];
 
       for (final song in savedSongs) {
         final fullPath = await _getFullPath(song.filePath);
 
-        // ファイルが存在しない曲は playlist にも AudioSource にも追加しない
-        if (!await File(fullPath).exists()) {
-          print('[AudioPlayer] File not found, skipping from playlist: $fullPath');
-          continue;
-        }
+        if (!await File(fullPath).exists()) continue;
 
-        // アルバムアート抽出
         final albumArt = await _extractAlbumArt(fullPath);
 
-        // ★ Bug 1 Fix: LRC を readAsString → LrcParser.parse で確実に復元
         List<LyricLine>? parsedLyrics;
         if (song.lrcPath != null && song.lrcPath!.isNotEmpty) {
           try {
@@ -235,7 +217,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
               parsedLyrics = LrcParser.parse(lrcContent);
             }
           } catch (e) {
-            print('[AudioPlayer] Failed to restore lyrics for ${song.title}: $e');
+            print('Failed to restore lyrics: $e');
           }
         }
 
@@ -245,7 +227,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           updatedSong = updatedSong.copyWith(lyrics: parsedLyrics);
         }
 
-        // state.playlist と audioSources に同時・同順で追加する
         validSongs.add(updatedSong);
 
         if (Platform.isAndroid || Platform.isIOS) {
@@ -267,7 +248,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }
       }
 
-      // playlist と AudioSource を同時に確定（順序保証）
       state = state.copyWith(
         playlist: validSongs,
         playlists: playlists,
@@ -289,7 +269,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   void _subscribeToPlayerStreams() {
     _positionSubscription = _player.positionStream.listen((position) {
-      // Ensure position doesn't exceed duration
       final safePosition = state.duration != null && position > state.duration! 
           ? state.duration! 
           : position;
@@ -306,7 +285,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
     _durationSubscription = _player.durationStream.listen((duration) {
       if (duration != null) {
-        // Ensure current position is within new duration bounds
         final safePosition = state.position > duration ? duration : state.position;
         state = state.copyWith(
           duration: duration,
@@ -339,7 +317,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     });
   }
 
-  // ✅ metadata_god に合わせた画像抽出ロジック
   Future<Uint8List?> _extractAlbumArt(String filePath) async {
     try {
       final metadata = await MetadataGod.readMetadata(file: filePath);
@@ -349,31 +326,23 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  //  metadata_god  metadata extraction logic
   Future<Song> _createSongFromMetadata(String absolutePath) async {
     try {
       final metadata = await MetadataGod.readMetadata(file: absolutePath);
-      
       final String title = p.basenameWithoutExtension(absolutePath);
-      // ★ Bug 2 Fix: artist が null・空文字・"unknown" 含む場合は生成時点で強制書き換え
       final String rawArtist = metadata.artist ?? '';
-      final String artist = (rawArtist.isEmpty ||
-              rawArtist.toLowerCase().contains('unknown'))
-          ? 'Mrs. GREEN APPLE'
-          : rawArtist;
-      // Safeguard: Always extract filename only, never store absolute paths
+      final String artist = (rawArtist.isEmpty || rawArtist.toLowerCase().contains('unknown'))
+          ? 'Mrs. GREEN APPLE' : rawArtist;
       final String fileName = p.basename(absolutePath);
 
       return Song(
         id: const Uuid().v4(),
         title: title,
         artist: artist,
-        filePath: fileName, // CRITICAL: Always save only filename, never absolute path
+        filePath: fileName, 
       );
     } catch (e) {
-      // Safeguard: Always extract filename only, never store absolute paths
       final String fileName = p.basename(absolutePath);
-      // ★ Bug 2 Fix: fromPath 経由でも artist を強制書き換え
       final song = Song.fromPath(fileName);
       final String rawArtist = song.artist ?? '';
       if (rawArtist.isEmpty || rawArtist.toLowerCase().contains('unknown')) {
@@ -389,11 +358,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         allowMultiple: true,
         type: FileType.custom,
         allowedExtensions: [
-          // 
-          'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac',
-          'aiff', 'aif',
-          // 
-          'lrc',
+          'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif', 'lrc',
         ],
       );
       if (result == null || result.files.isEmpty) return;
@@ -401,27 +366,24 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(isLoading: true);
       final List<Song> newSongs = [];
 
-      // 
       final Map<String, List<PlatformFile>> groups = {};
 
       for (final file in result.files) {
         if (file.path == null) continue;
-        final key = p.basenameWithoutExtension(file.path!).toLowerCase();
+        // ★ 修正1: 同じ「01.mp3」でもフォルダが違えば別曲として扱う！
+        final dir = p.dirname(file.path!);
+        final name = p.basenameWithoutExtension(file.path!).toLowerCase();
+        final key = '$dir/$name'; 
         groups.putIfAbsent(key, () => []).add(file);
       }
 
-      // 
       const audioExtensions = {
-        'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac',
-        'aiff', 'aif',
+        'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif',
       };
 
-      // 
       for (final entry in groups.entries) {
         try {
           final files = entry.value;
-
-          // 
           PlatformFile? audioFile;
           PlatformFile? lrcFile;
 
@@ -434,65 +396,51 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             }
           }
 
-          // 
           if (audioFile == null || audioFile.path == null) continue;
 
-          // 
           final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
           final audioFullPath = await _getFullPath(audioFileName);
           
-          // 
           var song = await _createSongFromMetadata(audioFullPath);
           
-          // 
           final albumArt = await _extractAlbumArt(audioFullPath);
           if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
 
-          // 
           String? lrcFileName;
           List<LyricLine> parsedLyrics = [];
 
           if (lrcFile != null && lrcFile.path != null) {
             try {
-              // 
               lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
               final lrcFullPath = await _getFullPath(lrcFileName);
               parsedLyrics = await _parseLrcFile(lrcFullPath);
               
-              // 
               song = song.copyWith(
-                lrcPath: lrcFileName, // 
+                lrcPath: lrcFileName, 
                 lyrics: parsedLyrics,
               );
-            } catch (lrcError) {
-              // 
-              print('[pickAndLoadSong] LRC: $lrcError');
+            } catch (e) {
               lrcFileName = null;
               parsedLyrics = [];
             }
           }
 
-          // 
           song = song.copyWith(
-            filePath: song.filePath.split('/').last, // 
+            filePath: song.filePath.split('/').last, 
             lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
           );
           
           await _dbHelper.insertOrUpdateSong(song);
           newSongs.add(song);
         } catch (e) {
-          // 
-          print('[pickAndLoadSong] Group error (${entry.key}): $e');
-          state = state.copyWith(errorMessage: '追加エラー (${entry.key}): $e');
+          continue;
         }
       }
 
-      // 
       final previousLength = state.playlist.length;
       final allSongs = [...state.playlist, ...newSongs];
       state = state.copyWith(playlist: allSongs);
 
-      // 
       if (_player.audioSource == null) {
         final audioSources = <AudioSource>[];
         for (final song in allSongs) {
@@ -525,7 +473,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       newAudioSources.add(audioSource);
     }
     
-    // Get current audio source and add new songs without stopping playback
     final currentAudioSource = _player.audioSource;
     if (currentAudioSource is ConcatenatingAudioSource) {
       await currentAudioSource.addAll(newAudioSources);
@@ -547,18 +494,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final lrcPath = result.files.single.path;
       if (lrcPath == null) return;
 
-      // ★ Bug Fix: 旧実装は元のパスをメモリにだけ読み込み DB を更新しないため
-      //   再起動で歌詞が消えていた。updateSongLrcPath 経由で
-      //   ① アプリローカルにコピー ② DB 更新 ③ state 更新 を確実に行う。
       await updateSongLrcPath(state.currentSong!.id, lrcPath);
     } catch (e) {
       state = state.copyWith(errorMessage: 'Failed to load lyrics: $e');
     }
   }
 
-  // =========================================================
-  // フォルダごと一括追加（メモリを爆発させない「最強のアプリ」仕様）
-  // =========================================================
   Future<int> pickAndLoadFolder() async {
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -570,7 +511,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(isLoading: true);
       final List<Song> newSongs = [];
       
-      // 拡張子でフィルタリング
       final allowedExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac', '.lrc'];
       final filteredFiles = result.files.where((file) {
         if (file.path == null) return false;
@@ -583,23 +523,25 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       for (final file in filteredFiles) {
         if (file.path != null) {
           final extension = p.extension(file.path!).toLowerCase();
-          final fileName = p.basenameWithoutExtension(file.path!);
+          // ★ 修正2: 同じ「01.mp3」でもフォルダが違えば別曲として扱う！
+          final dir = p.dirname(file.path!);
+          final fileName = p.basenameWithoutExtension(file.path!).toLowerCase();
+          final key = '$dir/$fileName'; 
           
           if (['.mp3', '.m4a', '.flac', '.wav', '.aac'].contains(extension)) {
-            if (!groupedFiles.containsKey(fileName)) {
-              groupedFiles[fileName] = [];
+            if (!groupedFiles.containsKey(key)) {
+              groupedFiles[key] = [];
             }
-            groupedFiles[fileName]!.add(file);
+            groupedFiles[key]!.add(file);
           } else if (extension == '.lrc') {
-            if (!groupedFiles.containsKey(fileName)) {
-              groupedFiles[fileName] = [];
+            if (!groupedFiles.containsKey(key)) {
+              groupedFiles[key] = [];
             }
-            groupedFiles[fileName]!.add(file);
+            groupedFiles[key]!.add(file);
           }
         }
       }
       
-      // 🚨 メモリ管理用のカウンターを追加
       int processedCount = 0;
 
       for (final entry in groupedFiles.entries) {
@@ -617,8 +559,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }
         
         if (audioFile != null && audioFile.path != null) {
-          try { // 🚨 1曲の処理エラーで全体を止めないための try-catch
-            // ★ Fix 1適用: コピー先フルパスでメタデータ抽出・アートワーク抽出
+          try { 
             final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
             final audioFullPath = await _getFullPath(audioFileName);
             
@@ -628,17 +569,15 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
             
             if (lrcFile != null && lrcFile.path != null) {
-              // ★ Fix 1適用: LRCもバイナリコピーしてローカルに保存
               final lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
               final lrcFullPath = await _getFullPath(lrcFileName);
               final lyrics = await _parseLrcFile(lrcFullPath);
               song = song.copyWith(
-                lrcPath: lrcFileName, // ★ Fix 2: コピー済みファイル名のみを設定
+                lrcPath: lrcFileName, 
                 lyrics: lyrics,
               );
             }
             
-            // ★ Fix 2: DB保存直前に絶対パスを物理ブロック — ファイル名のみに強制クレンジング
             song = song.copyWith(
               filePath: song.filePath.split('/').last,
               lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
@@ -646,15 +585,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             await _dbHelper.insertOrUpdateSong(song);
             newSongs.add(song);
 
-            // 🚨 ここがメモリ爆発を防ぐ最強の魔法！
             processedCount++;
             if (processedCount % 10 == 0) {
-              // 10曲処理するごとに50ミリ秒休憩し、メモリのゴミ(不要になった画像データ等)を回収させます
               await Future.delayed(const Duration(milliseconds: 50));
             }
           } catch (e) {
-            print('Error processing file ${audioFile.path}: $e');
-            continue; // エラーがあっても次の曲へ進む
+            continue; 
           }
         }
       }
@@ -664,7 +600,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(playlist: allSongs);
 
       if (_player.audioSource == null) {
-        // ★ Bug Fix: map() は async 非対応なので for ループで _getFullPath を使う
         final audioSources = <AudioSource>[];
         for (final song in allSongs) {
           final fullPath = await _getFullPath(song.filePath);
@@ -703,13 +638,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   }
 
   // =========================================================
-  // iTunesファイル共有で直接PCから入れた曲をスキャンする最強の機能
+  // ★ 修正3: iTunesファイル共有で転送した「フォルダ」に完全対応したスキャン！
   // =========================================================
   Future<int> scanLocalDocuments() async {
     state = state.copyWith(isLoading: true);
     try {
       final appDir = await getApplicationDocumentsDirectory();
-      // アプリ内に保存された全ファイルを一気に取得
       final List<FileSystemEntity> entities = await appDir.list(recursive: true).toList();
 
       final audioExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac'];
@@ -722,7 +656,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           if (audioExtensions.contains(ext)) {
             audioFiles.add(entity);
           } else if (ext == '.lrc') {
-            // パス全体を鍵にするので、絶対に上書きバグが起きない
             final key = entity.path.substring(0, entity.path.length - ext.length);
             lrcFiles[key] = entity;
           }
@@ -731,7 +664,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
       if (audioFiles.isEmpty) return 0;
 
-      // 既に登録済みのファイルをスキップするためのリスト
       final existingSongs = await _dbHelper.getAllSongs();
       final existingPaths = existingSongs.map((s) => s.filePath).toSet();
 
@@ -739,31 +671,31 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       int processedCount = 0;
 
       for (final file in audioFiles) {
-        final fileName = p.basename(file.path);
+        // ★ サブフォルダごと転送されたファイルにも対応するため「相対パス」を取得
+        final relativePath = p.relative(file.path, from: appDir.path).replaceAll('\\', '/');
 
-        // 既にDBに存在する場合はスキップ（2重登録を防止）
-        if (existingPaths.contains(fileName)) continue;
+        // すでにDBに同じ相対パスが存在すればスキップ
+        if (existingPaths.contains(relativePath)) continue;
 
         try {
-          // FilePickerと違い、既にローカルにあるのでコピー不要！超高速で抽出！
           var song = await _createSongFromMetadata(file.path);
           final albumArt = await _extractAlbumArt(file.path);
           if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
 
-          // LRCファイルの紐付け
           final key = file.path.substring(0, file.path.length - p.extension(file.path).length);
+          
+          String? relativeLrcPath;
+          List<LyricLine> lyrics = [];
           if (lrcFiles.containsKey(key)) {
             final lrcFile = lrcFiles[key]!;
-            final lyrics = await _parseLrcFile(lrcFile.path);
-            song = song.copyWith(
-              lrcPath: p.basename(lrcFile.path),
-              lyrics: lyrics,
-            );
+            lyrics = await _parseLrcFile(lrcFile.path);
+            relativeLrcPath = p.relative(lrcFile.path, from: appDir.path).replaceAll('\\', '/');
           }
 
           song = song.copyWith(
-            filePath: fileName,
-            lrcPath: song.lrcPath != null ? p.basename(song.lrcPath!) : null,
+            filePath: relativePath, // ★ ファイル名だけでなく、フォルダ情報も含めて保存
+            lrcPath: relativeLrcPath,
+            lyrics: lyrics,
           );
 
           await _dbHelper.insertOrUpdateSong(song);
@@ -771,7 +703,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
           processedCount++;
           if (processedCount % 10 == 0) {
-            await Future.delayed(const Duration(milliseconds: 50)); // メモリの息継ぎ
+            await Future.delayed(const Duration(milliseconds: 50));
           }
         } catch (e) {
           print('Error scanning file ${file.path}: $e');
@@ -1027,8 +959,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final List<AudioSource> audioSources = [];
       
       for (final song in playlist) {
-        // ★ Bug Fix: 旧実装は song.filePath（ファイル名のみ）を直接渡していた。
-        //   _getFullPath で絶対パスに変換してから AudioSource を生成する。
         final fullPath = await _getFullPath(song.filePath);
         final audioSource = (Platform.isAndroid || Platform.isIOS)
             ? AudioSource.uri(
@@ -1073,7 +1003,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   int _getCurrentLyricIndex(List<LyricLine> lyrics, Duration position) {
     if (lyrics.isEmpty) return -1;
 
-    // lyricOffset 
     final offsetMs = state.currentSong?.lyricOffset ?? 0;
     final adjustedPosition = Duration(
       milliseconds: (position.inMilliseconds + offsetMs).clamp(0, double.maxFinite.toInt()),
@@ -1093,20 +1022,17 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   
   Future<void> updateSongLrcPath(String songId, String lrcPath) async {
     try {
-      // Copy LRC file to local directory first
       final lrcFileName = await _copyFileToLocalDirectory(lrcPath);
       final fullLrcPath = await _getFullPath(lrcFileName);
       
-      // Use absolute path for parsing lyrics
       final lyrics = await _parseLrcFile(fullLrcPath);
       
-      // Save only filename to database
       await _dbHelper.updateSongLrcPath(songId, lrcFileName);
       
       final updatedPlaylist = state.playlist.map<Song>((song) {
         if (song.id == songId) {
           return song.copyWith(
-            lrcPath: lrcFileName, // Ensure only filename is saved
+            lrcPath: lrcFileName, 
             lyrics: lyrics,
           );
         }
@@ -1121,7 +1047,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  /// 
   Future<void> updateLyricOffset(String songId, int deltaMs) async {
     try {
       final songIndex = state.playlist.indexWhere((s) => s.id == songId);
@@ -1130,10 +1055,8 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final currentOffset = state.playlist[songIndex].lyricOffset;
       final newOffset = currentOffset + deltaMs;
 
-      // DB 
       await _dbHelper.updateLyricOffset(songId, newOffset);
 
-      // state 
       final updatedPlaylist = List<Song>.from(state.playlist);
       updatedPlaylist[songIndex] =
           updatedPlaylist[songIndex].copyWith(lyricOffset: newOffset);
