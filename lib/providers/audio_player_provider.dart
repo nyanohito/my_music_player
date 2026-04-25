@@ -128,33 +128,25 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   Future<void> setPlaybackSpeed(double speed) async {
     try {
-      final safeSpeed = Platform.isIOS 
-          ? speed.clamp(0.5, 1.5) 
-          : speed.clamp(0.5, 2.0); 
-      
+      final safeSpeed = Platform.isIOS ? speed.clamp(0.5, 1.5) : speed.clamp(0.5, 2.0); 
       if (Platform.isIOS) {
         await _player.setSpeed(safeSpeed);
         await _player.setPitch(1.0);
       } else {
         await _player.setSpeed(safeSpeed);
       }
-      
       state = state.copyWith(playbackSpeed: safeSpeed);
     } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to set playback speed: $e');
+      state = state.copyWith(errorMessage: '速度変更エラー: $e');
     }
   }
 
-    
   final DatabaseHelper _dbHelper = DatabaseHelper();
-
   StreamSubscription<Duration>? _positionSubscription;
 
   Future<String> _copyFileToLocalDirectory(String sourcePath) async {
     final sourceFile = File(sourcePath);
-    if (!await sourceFile.exists()) {
-      throw Exception('Source file does not exist: $sourcePath');
-    }
+    if (!await sourceFile.exists()) throw Exception('Source file does not exist: $sourcePath');
 
     final appDir = await getApplicationDocumentsDirectory();
     final fileName = p.basename(sourcePath);
@@ -204,7 +196,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
       for (final song in savedSongs) {
         final fullPath = await _getFullPath(song.filePath);
-
         if (!await File(fullPath).exists()) continue;
 
         final albumArt = await _extractAlbumArt(fullPath);
@@ -218,9 +209,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
               final lrcContent = await lrcFile.readAsString();
               parsedLyrics = LrcParser.parse(lrcContent);
             }
-          } catch (e) {
-            print('Failed to restore lyrics: $e');
-          }
+          } catch (_) {}
         }
 
         var updatedSong = song;
@@ -231,7 +220,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
         validSongs.add(updatedSong);
 
-        // 🚨 致命的バグ修正：通信限界（MethodChannel）突破を防ぐため、artUriのBase64送信を完全に削除
         if (Platform.isAndroid || Platform.isIOS) {
           audioSources.add(AudioSource.uri(
             Uri.file(fullPath),
@@ -239,31 +227,27 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
               id: updatedSong.id,
               title: updatedSong.title,
               artist: updatedSong.artist,
-              artUri: null, // ← ここが110曲クラッシュの完全な原因でした。無効化して安全を確保。
+              artUri: null, 
             ),
           ));
         } else {
           audioSources.add(LocalFileStreamAudioSource(fullPath));
         }
 
-        // 大量データの読み込み時にアプリが固まらないよう、10曲ごとに一瞬息継ぎ（メモリ解放）させる
         loadedCount++;
         if (loadedCount % 10 == 0) {
           await Future.delayed(const Duration(milliseconds: 10));
         }
       }
 
-      state = state.copyWith(
-        playlist: validSongs,
-        playlists: playlists,
-      );
+      state = state.copyWith(playlist: validSongs, playlists: playlists);
 
       if (audioSources.isNotEmpty) {
         final playlist = ConcatenatingAudioSource(children: audioSources);
         await _player.setAudioSource(playlist, initialPosition: Duration.zero, preload: false);
       }
     } catch (e) {
-      print('Failed to load saved songs: $e');
+      print('起動時ロードエラー: $e');
     }
   }
 
@@ -274,27 +258,15 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   void _subscribeToPlayerStreams() {
     _positionSubscription = _player.positionStream.listen((position) {
-      final safePosition = state.duration != null && position > state.duration! 
-          ? state.duration! 
-          : position;
-      
-      final lyricIndex = _getCurrentLyricIndex(
-        state.currentSong?.lyrics ?? [],
-        safePosition,
-      );
-      state = state.copyWith(
-        position: safePosition,
-        currentLyricIndex: lyricIndex,
-      );
+      final safePosition = state.duration != null && position > state.duration! ? state.duration! : position;
+      final lyricIndex = _getCurrentLyricIndex(state.currentSong?.lyrics ?? [], safePosition);
+      state = state.copyWith(position: safePosition, currentLyricIndex: lyricIndex);
     });
 
     _durationSubscription = _player.durationStream.listen((duration) {
       if (duration != null) {
         final safePosition = state.position > duration ? duration : state.position;
-        state = state.copyWith(
-          duration: duration,
-          position: safePosition,
-        );
+        state = state.copyWith(duration: duration, position: safePosition);
       }
     });
 
@@ -309,44 +281,39 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     _currentIndexSubscription = _player.currentIndexStream.listen((index) {
       if (index != null && state.currentSongIndex != index) {
         final song = state.playlist[index!];
-        if (song != null) {
-          DatabaseHelper().addPlayHistory(song.id);
-        }
+        if (song != null) DatabaseHelper().addPlayHistory(song.id);
       }
-      
       if (index != null && index >= 0 && index < state.playlist.length) {
-        state = state.copyWith(
-          currentSongIndex: index,
-        );
+        state = state.copyWith(currentSongIndex: index);
       }
     });
   }
 
+  // 🚀 致命的バグ修正：無限待機を防ぐためのタイムアウト（2秒）を導入
   Future<Uint8List?> _extractAlbumArt(String filePath) async {
     try {
-      final metadata = await MetadataGod.readMetadata(file: filePath);
+      final metadata = await MetadataGod.readMetadata(file: filePath)
+          .timeout(const Duration(seconds: 2));
       return metadata.picture?.data;
     } catch (e) {
       return null;
     }
   }
 
+  // 🚀 致命的バグ修正：無限待機を防ぐためのタイムアウト（2秒）を導入
   Future<Song> _createSongFromMetadata(String absolutePath) async {
     try {
-      final metadata = await MetadataGod.readMetadata(file: absolutePath);
+      final metadata = await MetadataGod.readMetadata(file: absolutePath)
+          .timeout(const Duration(seconds: 2));
       final String title = p.basenameWithoutExtension(absolutePath);
       final String rawArtist = metadata.artist ?? '';
       final String artist = (rawArtist.isEmpty || rawArtist.toLowerCase().contains('unknown'))
           ? 'Mrs. GREEN APPLE' : rawArtist;
       final String fileName = p.basename(absolutePath);
 
-      return Song(
-        id: const Uuid().v4(),
-        title: title,
-        artist: artist,
-        filePath: fileName, 
-      );
+      return Song(id: const Uuid().v4(), title: title, artist: artist, filePath: fileName);
     } catch (e) {
+      // タイムアウトまたはエラー時は、ファイル名から強制的に曲データを作成してスキップを防ぐ
       final String fileName = p.basename(absolutePath);
       final song = Song.fromPath(fileName);
       final String rawArtist = song.artist ?? '';
@@ -357,289 +324,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  Future<void> pickAndLoadSong() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.custom,
-        allowedExtensions: [
-          'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif', 'lrc',
-        ],
-      );
-      if (result == null || result.files.isEmpty) return;
-
-      state = state.copyWith(isLoading: true);
-      final List<Song> newSongs = [];
-
-      final Map<String, List<PlatformFile>> groups = {};
-
-      for (final file in result.files) {
-        if (file.path == null) continue;
-        final dir = p.dirname(file.path!);
-        final name = p.basenameWithoutExtension(file.path!).toLowerCase();
-        final key = '$dir/$name'; 
-        groups.putIfAbsent(key, () => []).add(file);
-      }
-
-      const audioExtensions = {
-        'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif',
-      };
-
-      for (final entry in groups.entries) {
-        try {
-          final files = entry.value;
-          PlatformFile? audioFile;
-          PlatformFile? lrcFile;
-
-          for (final f in files) {
-            final ext = p.extension(f.path!).replaceFirst('.', '').toLowerCase();
-            if (ext == 'lrc') {
-              lrcFile = f;
-            } else if (audioExtensions.contains(ext)) {
-              audioFile = f;
-            }
-          }
-
-          if (audioFile == null || audioFile.path == null) continue;
-
-          final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
-          final audioFullPath = await _getFullPath(audioFileName);
-          
-          var song = await _createSongFromMetadata(audioFullPath);
-          
-          final albumArt = await _extractAlbumArt(audioFullPath);
-          if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
-
-          String? lrcFileName;
-          List<LyricLine> parsedLyrics = [];
-
-          if (lrcFile != null && lrcFile.path != null) {
-            try {
-              lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
-              final lrcFullPath = await _getFullPath(lrcFileName);
-              parsedLyrics = await _parseLrcFile(lrcFullPath);
-              
-              song = song.copyWith(
-                lrcPath: lrcFileName, 
-                lyrics: parsedLyrics,
-              );
-            } catch (e) {
-              lrcFileName = null;
-              parsedLyrics = [];
-            }
-          }
-
-          song = song.copyWith(
-            filePath: song.filePath.split('/').last, 
-            lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
-          );
-          
-          await _dbHelper.insertOrUpdateSong(song);
-          newSongs.add(song);
-        } catch (e) {
-          continue;
-        }
-      }
-
-      final previousLength = state.playlist.length;
-      final allSongs = [...state.playlist, ...newSongs];
-      state = state.copyWith(playlist: allSongs);
-
-      if (_player.audioSource == null) {
-        final audioSources = <AudioSource>[];
-        for (final song in allSongs) {
-          final fullPath = await _getFullPath(song.filePath);
-          if (Platform.isAndroid || Platform.isIOS) {
-            audioSources.add(AudioSource.uri(
-              Uri.file(fullPath),
-              tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null),
-            ));
-          } else {
-            audioSources.add(LocalFileStreamAudioSource(fullPath));
-          }
-        }
-        final playlist = ConcatenatingAudioSource(children: audioSources);
-        await _player.setAudioSource(playlist, initialIndex: previousLength);
-        _player.play(); 
-      } else {
-        await _appendSongsToCurrentPlaylist(newSongs);
-      }
-    } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to load songs: $e');
-    } finally {
-      state = state.copyWith(isLoading: false);
-    }
-  }
-  
-  Future<void> _appendSongsToCurrentPlaylist(List<Song> newSongs) async {
-    final newAudioSources = <AudioSource>[];
-    for (final song in newSongs) {
-      final fullPath = await _getFullPath(song.filePath);
-      final audioSource = (Platform.isAndroid || Platform.isIOS)
-          ? AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null))
-          : LocalFileStreamAudioSource(fullPath);
-      newAudioSources.add(audioSource);
-    }
-    
-    final currentAudioSource = _player.audioSource;
-    if (currentAudioSource is ConcatenatingAudioSource) {
-      await currentAudioSource.addAll(newAudioSources);
-    }
-  }
-
-  Future<void> pickAndLoadLrc() async {
-    if (!state.hasCurrentSong) return;
-
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['lrc'],
-        allowMultiple: false,
-      );
-
-      if (result == null || result.files.isEmpty) return;
-
-      final lrcPath = result.files.single.path;
-      if (lrcPath == null) return;
-
-      await updateSongLrcPath(state.currentSong!.id, lrcPath);
-    } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to load lyrics: $e');
-    }
-  }
-
-  Future<int> pickAndLoadFolder() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
-        allowMultiple: true,
-      );
-      if (result == null || result.files.isEmpty) return 0;
-
-      state = state.copyWith(isLoading: true);
-      final List<Song> newSongs = [];
-      
-      final allowedExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac', '.lrc'];
-      final filteredFiles = result.files.where((file) {
-        if (file.path == null) return false;
-        final extension = p.extension(file.path!).toLowerCase();
-        return allowedExtensions.contains(extension);
-      }).toList();
-      
-      final Map<String, List<PlatformFile>> groupedFiles = {};
-      
-      for (final file in filteredFiles) {
-        if (file.path != null) {
-          final extension = p.extension(file.path!).toLowerCase();
-          final dir = p.dirname(file.path!);
-          final fileName = p.basenameWithoutExtension(file.path!).toLowerCase();
-          final key = '$dir/$fileName'; 
-          
-          if (['.mp3', '.m4a', '.flac', '.wav', '.aac'].contains(extension)) {
-            if (!groupedFiles.containsKey(key)) {
-              groupedFiles[key] = [];
-            }
-            groupedFiles[key]!.add(file);
-          } else if (extension == '.lrc') {
-            if (!groupedFiles.containsKey(key)) {
-              groupedFiles[key] = [];
-            }
-            groupedFiles[key]!.add(file);
-          }
-        }
-      }
-      
-      int processedCount = 0;
-
-      for (final entry in groupedFiles.entries) {
-        final files = entry.value;
-        PlatformFile? audioFile;
-        PlatformFile? lrcFile;
-        
-        for (final file in files) {
-          final extension = p.extension(file.path!).toLowerCase();
-          if (['.mp3', '.m4a', '.flac', '.wav', '.aac'].contains(extension)) {
-            audioFile = file;
-          } else if (extension == '.lrc') {
-            lrcFile = file;
-          }
-        }
-        
-        if (audioFile != null && audioFile.path != null) {
-          try { 
-            final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
-            final audioFullPath = await _getFullPath(audioFileName);
-            
-            var song = await _createSongFromMetadata(audioFullPath);
-            
-            final albumArt = await _extractAlbumArt(audioFullPath);
-            if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
-            
-            if (lrcFile != null && lrcFile.path != null) {
-              final lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
-              final lrcFullPath = await _getFullPath(lrcFileName);
-              final lyrics = await _parseLrcFile(lrcFullPath);
-              song = song.copyWith(
-                lrcPath: lrcFileName, 
-                lyrics: lyrics,
-              );
-            }
-            
-            song = song.copyWith(
-              filePath: song.filePath.split('/').last,
-              lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
-            );
-            await _dbHelper.insertOrUpdateSong(song);
-            newSongs.add(song);
-
-            processedCount++;
-            if (processedCount % 10 == 0) {
-              await Future.delayed(const Duration(milliseconds: 50));
-            }
-          } catch (e) {
-            continue; 
-          }
-        }
-      }
-
-      final previousLength = state.playlist.length;
-      final allSongs = [...state.playlist, ...newSongs];
-      state = state.copyWith(playlist: allSongs);
-
-      if (_player.audioSource == null) {
-        final audioSources = <AudioSource>[];
-        for (final song in allSongs) {
-          final fullPath = await _getFullPath(song.filePath);
-          if (Platform.isAndroid || Platform.isIOS) {
-            audioSources.add(AudioSource.uri(
-              Uri.file(fullPath),
-              tag: MediaItem(
-                id: song.id,
-                title: song.title,
-                artist: song.artist,
-                artUri: null, // 🚨 ペイロード制限対策
-              ),
-            ));
-          } else {
-            audioSources.add(LocalFileStreamAudioSource(fullPath));
-          }
-        }
-        final playlist = ConcatenatingAudioSource(children: audioSources);
-        await _player.setAudioSource(playlist, initialIndex: previousLength);
-        _player.play(); 
-      } else {
-        await _appendSongsToCurrentPlaylist(newSongs);
-      }
-      
-      return newSongs.length;
-    } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to load files: $e');
-      return 0;
-    } finally {
-      state = state.copyWith(isLoading: false);
-    }
-  }
-
+  // ★ iTunesフォルダ転送からのスキャン
   Future<int> scanLocalDocuments() async {
     state = state.copyWith(isLoading: true);
     try {
@@ -690,22 +375,18 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             relativeLrcPath = p.relative(lrcFile.path, from: appDir.path).replaceAll('\\', '/');
           }
 
-          song = song.copyWith(
-            filePath: relativePath,
-            lrcPath: relativeLrcPath,
-            lyrics: lyrics,
-          );
+          song = song.copyWith(filePath: relativePath, lrcPath: relativeLrcPath, lyrics: lyrics);
 
           await _dbHelper.insertOrUpdateSong(song);
           newSongs.add(song);
 
           processedCount++;
-          if (processedCount % 10 == 0) {
-            await Future.delayed(const Duration(milliseconds: 50));
+          // 負荷軽減のため50曲ごとに息継ぎ
+          if (processedCount % 50 == 0) {
+            await Future.delayed(const Duration(milliseconds: 10));
           }
         } catch (e) {
-          print('Error scanning file ${file.path}: $e');
-          continue;
+          continue; // エラーがあっても絶対に止まらず次の曲へ！
         }
       }
 
@@ -721,7 +402,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             if (Platform.isAndroid || Platform.isIOS) {
               audioSources.add(AudioSource.uri(
                 Uri.file(fullPath),
-                tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null), // 🚨 ペイロード制限対策
+                tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null), 
               ));
             } else {
               audioSources.add(LocalFileStreamAudioSource(fullPath));
@@ -743,336 +424,410 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
+  Future<void> pickAndLoadSong() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.custom,
+        allowedExtensions: ['mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif', 'lrc'],
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      state = state.copyWith(isLoading: true);
+      final List<Song> newSongs = [];
+      final Map<String, List<PlatformFile>> groups = {};
+
+      for (final file in result.files) {
+        if (file.path == null) continue;
+        final dir = p.dirname(file.path!);
+        final name = p.basenameWithoutExtension(file.path!).toLowerCase();
+        final key = '$dir/$name'; 
+        groups.putIfAbsent(key, () => []).add(file);
+      }
+
+      const audioExtensions = {'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif'};
+
+      for (final entry in groups.entries) {
+        try {
+          final files = entry.value;
+          PlatformFile? audioFile;
+          PlatformFile? lrcFile;
+
+          for (final f in files) {
+            final ext = p.extension(f.path!).replaceFirst('.', '').toLowerCase();
+            if (ext == 'lrc') {
+              lrcFile = f;
+            } else if (audioExtensions.contains(ext)) {
+              audioFile = f;
+            }
+          }
+
+          if (audioFile == null || audioFile.path == null) continue;
+
+          final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
+          final audioFullPath = await _getFullPath(audioFileName);
+          
+          var song = await _createSongFromMetadata(audioFullPath);
+          final albumArt = await _extractAlbumArt(audioFullPath);
+          if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
+
+          String? lrcFileName;
+          List<LyricLine> parsedLyrics = [];
+
+          if (lrcFile != null && lrcFile.path != null) {
+            try {
+              lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
+              final lrcFullPath = await _getFullPath(lrcFileName);
+              parsedLyrics = await _parseLrcFile(lrcFullPath);
+              song = song.copyWith(lrcPath: lrcFileName, lyrics: parsedLyrics);
+            } catch (_) {}
+          }
+
+          song = song.copyWith(
+            filePath: song.filePath.split('/').last, 
+            lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
+          );
+          
+          await _dbHelper.insertOrUpdateSong(song);
+          newSongs.add(song);
+        } catch (_) {
+          continue;
+        }
+      }
+
+      final previousLength = state.playlist.length;
+      final allSongs = [...state.playlist, ...newSongs];
+      state = state.copyWith(playlist: allSongs);
+
+      if (_player.audioSource == null) {
+        final audioSources = <AudioSource>[];
+        for (final song in allSongs) {
+          final fullPath = await _getFullPath(song.filePath);
+          if (Platform.isAndroid || Platform.isIOS) {
+            audioSources.add(AudioSource.uri(
+              Uri.file(fullPath),
+              tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null),
+            ));
+          } else {
+            audioSources.add(LocalFileStreamAudioSource(fullPath));
+          }
+        }
+        final playlist = ConcatenatingAudioSource(children: audioSources);
+        await _player.setAudioSource(playlist, initialIndex: previousLength);
+        _player.play(); 
+      } else {
+        await _appendSongsToCurrentPlaylist(newSongs);
+      }
+    } catch (e) {
+      state = state.copyWith(errorMessage: 'Failed to load songs: $e');
+    } finally {
+      state = state.copyWith(isLoading: false);
+    }
+  }
+
+  Future<int> pickAndLoadFolder() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(type: FileType.any, allowMultiple: true);
+      if (result == null || result.files.isEmpty) return 0;
+
+      state = state.copyWith(isLoading: true);
+      final List<Song> newSongs = [];
+      final allowedExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac', '.lrc'];
+      final filteredFiles = result.files.where((file) {
+        if (file.path == null) return false;
+        final extension = p.extension(file.path!).toLowerCase();
+        return allowedExtensions.contains(extension);
+      }).toList();
+      
+      final Map<String, List<PlatformFile>> groupedFiles = {};
+      for (final file in filteredFiles) {
+        if (file.path != null) {
+          final extension = p.extension(file.path!).toLowerCase();
+          final dir = p.dirname(file.path!);
+          final fileName = p.basenameWithoutExtension(file.path!).toLowerCase();
+          final key = '$dir/$fileName'; 
+          
+          if (['.mp3', '.m4a', '.flac', '.wav', '.aac'].contains(extension)) {
+            if (!groupedFiles.containsKey(key)) groupedFiles[key] = [];
+            groupedFiles[key]!.add(file);
+          } else if (extension == '.lrc') {
+            if (!groupedFiles.containsKey(key)) groupedFiles[key] = [];
+            groupedFiles[key]!.add(file);
+          }
+        }
+      }
+      
+      int processedCount = 0;
+      for (final entry in groupedFiles.entries) {
+        final files = entry.value;
+        PlatformFile? audioFile;
+        PlatformFile? lrcFile;
+        for (final file in files) {
+          final extension = p.extension(file.path!).toLowerCase();
+          if (['.mp3', '.m4a', '.flac', '.wav', '.aac'].contains(extension)) audioFile = file;
+          else if (extension == '.lrc') lrcFile = file;
+        }
+        
+        if (audioFile != null && audioFile.path != null) {
+          try { 
+            final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
+            final audioFullPath = await _getFullPath(audioFileName);
+            var song = await _createSongFromMetadata(audioFullPath);
+            final albumArt = await _extractAlbumArt(audioFullPath);
+            if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
+            
+            if (lrcFile != null && lrcFile.path != null) {
+              final lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
+              final lrcFullPath = await _getFullPath(lrcFileName);
+              final lyrics = await _parseLrcFile(lrcFullPath);
+              song = song.copyWith(lrcPath: lrcFileName, lyrics: lyrics);
+            }
+            
+            song = song.copyWith(
+              filePath: song.filePath.split('/').last,
+              lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
+            );
+            await _dbHelper.insertOrUpdateSong(song);
+            newSongs.add(song);
+
+            processedCount++;
+            if (processedCount % 10 == 0) await Future.delayed(const Duration(milliseconds: 50));
+          } catch (_) {
+            continue; 
+          }
+        }
+      }
+
+      final previousLength = state.playlist.length;
+      final allSongs = [...state.playlist, ...newSongs];
+      state = state.copyWith(playlist: allSongs);
+
+      if (_player.audioSource == null) {
+        final audioSources = <AudioSource>[];
+        for (final song in allSongs) {
+          final fullPath = await _getFullPath(song.filePath);
+          if (Platform.isAndroid || Platform.isIOS) {
+            audioSources.add(AudioSource.uri(
+              Uri.file(fullPath),
+              tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null),
+            ));
+          } else {
+            audioSources.add(LocalFileStreamAudioSource(fullPath));
+          }
+        }
+        final playlist = ConcatenatingAudioSource(children: audioSources);
+        await _player.setAudioSource(playlist, initialIndex: previousLength);
+        _player.play(); 
+      } else {
+        await _appendSongsToCurrentPlaylist(newSongs);
+      }
+      return newSongs.length;
+    } catch (e) {
+      state = state.copyWith(errorMessage: 'Failed to load files: $e');
+      return 0;
+    } finally {
+      state = state.copyWith(isLoading: false);
+    }
+  }
+  
+  Future<void> _appendSongsToCurrentPlaylist(List<Song> newSongs) async {
+    final newAudioSources = <AudioSource>[];
+    for (final song in newSongs) {
+      final fullPath = await _getFullPath(song.filePath);
+      final audioSource = (Platform.isAndroid || Platform.isIOS)
+          ? AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null))
+          : LocalFileStreamAudioSource(fullPath);
+      newAudioSources.add(audioSource);
+    }
+    
+    final currentAudioSource = _player.audioSource;
+    if (currentAudioSource is ConcatenatingAudioSource) {
+      await currentAudioSource.addAll(newAudioSources);
+    }
+  }
+
+  Future<void> pickAndLoadLrc() async {
+    if (!state.hasCurrentSong) return;
+    try {
+      final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['lrc'], allowMultiple: false);
+      if (result == null || result.files.isEmpty) return;
+      final lrcPath = result.files.single.path;
+      if (lrcPath == null) return;
+      await updateSongLrcPath(state.currentSong!.id, lrcPath);
+    } catch (e) {
+      state = state.copyWith(errorMessage: 'Failed to load lyrics: $e');
+    }
+  }
+
   Future<void> playSongAtIndex(int index) async {
     if (index < 0 || index >= state.playlist.length) return;
-    
     state = state.copyWith(currentSongIndex: index);
     await _player.seek(Duration.zero, index: index);
     await _player.play();
   }
-
   Future<void> playNext() async {
     if (state.playlist.isEmpty) return;
-    
     int nextIndex = state.currentSongIndex + 1;
     if (nextIndex >= state.playlist.length) {
-      if (state.repeatMode == PlaylistMode.all) {
-        nextIndex = 0; 
-      } else {
-        return; 
-      }
+      if (state.repeatMode == PlaylistMode.all) nextIndex = 0; else return; 
     }
-    
     await playSongAtIndex(nextIndex);
   }
-
   Future<void> playPrevious() async {
     if (state.playlist.isEmpty) return;
-    
     int prevIndex = state.currentSongIndex - 1;
     if (prevIndex < 0) {
-      if (state.repeatMode == PlaylistMode.all) {
-        prevIndex = state.playlist.length - 1; 
-      } else {
-        return; 
-      }
+      if (state.repeatMode == PlaylistMode.all) prevIndex = state.playlist.length - 1; else return; 
     }
-    
     await playSongAtIndex(prevIndex);
   }
-
   Future<void> toggleShuffle() async {
     final newShuffleState = !state.isShuffleModeEnabled;
     state = state.copyWith(isShuffleModeEnabled: newShuffleState);
     await _player.setShuffleModeEnabled(newShuffleState);
   }
-
   Future<void> toggleFavorite(String songId) async {
     try {
       await _dbHelper.toggleFavorite(songId);
       final updatedPlaylist = state.playlist.map((song) {
-        if (song.id == songId) {
-          return song.copyWithFavorite(!song.isFavorite);
-        }
+        if (song.id == songId) return song.copyWithFavorite(!song.isFavorite);
         return song;
       }).toList();
-      
       state = state.copyWith(playlist: updatedPlaylist);
     } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to toggle favorite: $e',
-      );
+      state = state.copyWith(errorMessage: 'Failed to toggle favorite: $e');
     }
   }
-
   Future<List<Song>> searchSongs(String query) async {
-    try {
-      return await _dbHelper.searchSongs(query);
-    } catch (e) {
-      return [];
-    }
+    return await _dbHelper.searchSongs(query);
   }
-
   Future<List<Song>> getFavoriteSongs() async {
-    try {
-      return await _dbHelper.getFavoriteSongs();
-    } catch (e) {
-      return [];
-    }
+    return await _dbHelper.getFavoriteSongs();
   }
-
   Future<void> removeSong(String songId) async {
     try {
       final songIndex = state.playlist.indexWhere((song) => song.id == songId);
-      if (songIndex == -1) {
-        return;
-      }
-
+      if (songIndex == -1) return;
       if (_player.audioSource != null) {
         final concatenatingSource = _player.audioSource as ConcatenatingAudioSource;
         await concatenatingSource.removeAt(songIndex);
       }
-
       await _dbHelper.deleteSong(songId);
-
       final updatedPlaylist = List<Song>.from(state.playlist)..removeAt(songIndex);
-      
       int newCurrentIndex = state.currentSongIndex;
       if (songIndex < state.currentSongIndex) {
         newCurrentIndex = state.currentSongIndex - 1;
       } else if (songIndex == state.currentSongIndex && newCurrentIndex >= updatedPlaylist.length) {
         newCurrentIndex = updatedPlaylist.length > 0 ? 0 : -1;
       }
-
-      state = state.copyWith(
-        playlist: updatedPlaylist,
-        currentSongIndex: newCurrentIndex,
-      );
-
+      state = state.copyWith(playlist: updatedPlaylist, currentSongIndex: newCurrentIndex);
     } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to remove song: $e',
-      );
+      state = state.copyWith(errorMessage: 'Failed to remove song: $e');
     }
   }
-
   Future<void> toggleRepeat() async {
     PlaylistMode newMode;
     switch (state.repeatMode) {
-      case PlaylistMode.off:
-        newMode = PlaylistMode.one;
-        break;
-      case PlaylistMode.one:
-        newMode = PlaylistMode.all;
-        break;
-      case PlaylistMode.all:
-        newMode = PlaylistMode.off;
-        break;
+      case PlaylistMode.off: newMode = PlaylistMode.one; break;
+      case PlaylistMode.one: newMode = PlaylistMode.all; break;
+      case PlaylistMode.all: newMode = PlaylistMode.off; break;
     }
-    
     state = state.copyWith(repeatMode: newMode);
-    
     LoopMode loopMode;
     switch (newMode) {
-      case PlaylistMode.off:
-        loopMode = LoopMode.off;
-        break;
-      case PlaylistMode.one:
-        loopMode = LoopMode.one;
-        break;
-      case PlaylistMode.all:
-        loopMode = LoopMode.all;
-        break;
+      case PlaylistMode.off: loopMode = LoopMode.off; break;
+      case PlaylistMode.one: loopMode = LoopMode.one; break;
+      case PlaylistMode.all: loopMode = LoopMode.all; break;
     }
-    
     await _player.setLoopMode(loopMode);
   }
-
   Future<void> loadSong(Song song) async {
-    await _loadSong(song);
+    await _loadPlaylist([song], 0);
   }
-
   Future<void> togglePlayPause() async {
-    if (_player.playing) {
-      await _player.pause();
-    } else {
-      await _player.play();
-    }
+    if (_player.playing) await _player.pause(); else await _player.play();
   }
-
-  Future<void> play() async {
-    await _player.play();
-  }
-
-  Future<void> pause() async {
-    await _player.pause();
-  }
-
-  Future<void> seekTo(Duration position) async {
-    await _player.seek(position);
-  }
-
+  Future<void> play() async => await _player.play();
+  Future<void> pause() async => await _player.pause();
+  Future<void> seekTo(Duration position) async => await _player.seek(position);
   Future<void> createPlaylist(String name) async {
     try {
       final playlistId = await _dbHelper.createPlaylist(name);
       final updatedPlaylists = [...state.playlists, {'id': playlistId, 'name': name}];
       state = state.copyWith(playlists: updatedPlaylists);
-      
-    } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to create playlist: $e',
-      );
-    }
+    } catch (e) {}
   }
-
   Future<void> addSongToPlaylist(String songId, String playlistId) async {
     try {
       await _dbHelper.addSongToPlaylist(playlistId, songId);
-    } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to add song to playlist: $e',
-      );
-    }
+    } catch (e) {}
   }
-
   Future<void> loadPlaylists() async {
     try {
       final playlists = await _dbHelper.getAllPlaylists();
       state = state.copyWith(playlists: playlists);
-    } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to load playlists: $e',
-      );
-    }
+    } catch (e) {}
   }
-
   Future<void> _loadPlaylist(List<Song> playlist, int startIndex) async {
     try {
       state = state.copyWith(isLoading: true, clearError: true);
-
       final List<AudioSource> audioSources = [];
-      
       for (final song in playlist) {
         final fullPath = await _getFullPath(song.filePath);
-        final audioSource = (Platform.isAndroid || Platform.isIOS)
-            ? AudioSource.uri(
-                Uri.file(fullPath),
-                tag: MediaItem(
-                  id: song.id,
-                  title: song.title,
-                  artist: song.artist,
-                  artUri: null, // 🚨 ペイロード制限対策
-                ),
-              )
-            : LocalFileStreamAudioSource(fullPath);
-        
-        audioSources.add(audioSource);
+        audioSources.add(Platform.isAndroid || Platform.isIOS
+            ? AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null))
+            : LocalFileStreamAudioSource(fullPath));
       }
-
-      final concatenatingSource = ConcatenatingAudioSource(
-        useLazyPreparation: true,
-        shuffleOrder: state.isShuffleModeEnabled ? DefaultShuffleOrder() : null,
-        children: audioSources,
-      );
-
+      final concatenatingSource = ConcatenatingAudioSource(useLazyPreparation: true, shuffleOrder: state.isShuffleModeEnabled ? DefaultShuffleOrder() : null, children: audioSources);
       await _player.setAudioSource(concatenatingSource, initialPosition: Duration.zero, preload: false);
-      
-      if (startIndex > 0) {
-        await _player.seek(Duration.zero, index: startIndex);
-      }
-
+      if (startIndex > 0) await _player.seek(Duration.zero, index: startIndex);
       await _player.play();
-      
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: 'Failed to load playlist: $e',
-      );
+      state = state.copyWith(isLoading: false, errorMessage: 'Failed to load playlist: $e');
     }
   }
-
-  Future<void> _loadSong(Song song) async {
-    await _loadPlaylist([song], 0);
-  }
-
   int _getCurrentLyricIndex(List<LyricLine> lyrics, Duration position) {
     if (lyrics.isEmpty) return -1;
-
     final offsetMs = state.currentSong?.lyricOffset ?? 0;
-    final adjustedPosition = Duration(
-      milliseconds: (position.inMilliseconds + offsetMs).clamp(0, double.maxFinite.toInt()),
-    );
-
+    final adjustedPosition = Duration(milliseconds: (position.inMilliseconds + offsetMs).clamp(0, double.maxFinite.toInt()));
     int index = -1;
     for (int i = 0; i < lyrics.length; i++) {
-      if (lyrics[i].position <= adjustedPosition) {
-        index = i;
-      } else {
-        break; 
-      }
+      if (lyrics[i].position <= adjustedPosition) index = i; else break; 
     }
     return index;
   }
-
-  
   Future<void> updateSongLrcPath(String songId, String lrcPath) async {
     try {
       final lrcFileName = await _copyFileToLocalDirectory(lrcPath);
       final fullLrcPath = await _getFullPath(lrcFileName);
-      
       final lyrics = await _parseLrcFile(fullLrcPath);
-      
       await _dbHelper.updateSongLrcPath(songId, lrcFileName);
-      
       final updatedPlaylist = state.playlist.map<Song>((song) {
-        if (song.id == songId) {
-          return song.copyWith(
-            lrcPath: lrcFileName, 
-            lyrics: lyrics,
-          );
-        }
+        if (song.id == songId) return song.copyWith(lrcPath: lrcFileName, lyrics: lyrics);
         return song;
       }).toList();
-      
       state = state.copyWith(playlist: updatedPlaylist);
-    } catch (e) {
-      state = state.copyWith(
-        errorMessage: 'Failed to update LRC path: $e',
-      );
-    }
+    } catch (e) {}
   }
-
   Future<void> updateLyricOffset(String songId, int deltaMs) async {
     try {
       final songIndex = state.playlist.indexWhere((s) => s.id == songId);
       if (songIndex == -1) return;
-
       final currentOffset = state.playlist[songIndex].lyricOffset;
       final newOffset = currentOffset + deltaMs;
-
       await _dbHelper.updateLyricOffset(songId, newOffset);
-
       final updatedPlaylist = List<Song>.from(state.playlist);
-      updatedPlaylist[songIndex] =
-          updatedPlaylist[songIndex].copyWith(lyricOffset: newOffset);
-
+      updatedPlaylist[songIndex] = updatedPlaylist[songIndex].copyWith(lyricOffset: newOffset);
       state = state.copyWith(playlist: updatedPlaylist);
-    } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to update lyric offset: $e');
-    }
+    } catch (e) {}
   }
-
   Future<List<LyricLine>> _parseLrcFile(String lrcPath) async {
     try {
       final file = File(lrcPath);
-      if (!await file.exists()) {
-        return [];
-      }
-      
+      if (!await file.exists()) return [];
       final content = await file.readAsString();
       final lines = content.split('\n');
       final lyrics = <LyricLine>[];
-      
       for (final line in lines) {
         final match = RegExp(r'\[(\d{2}):(\d{2})\.(\d{2})\](.*)').firstMatch(line);
         if (match != null) {
@@ -1080,22 +835,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           final seconds = int.parse(match.group(2)!);
           final milliseconds = int.parse(match.group(3)!);
           final text = match.group(4)?.trim() ?? '';
-          
-          lyrics.add(LyricLine(
-            position: Duration(
-              minutes: minutes,
-              seconds: seconds,
-              milliseconds: milliseconds,
-            ),
-            text: text,
-          ));
+          lyrics.add(LyricLine(position: Duration(minutes: minutes, seconds: seconds, milliseconds: milliseconds), text: text));
         }
       }
-      
       return lyrics;
-    } catch (e) {
-      return [];
-    }
+    } catch (e) { return []; }
   }
 
   @override
@@ -1109,7 +853,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   }
 }
 
-final audioPlayerProvider =
-    StateNotifierProvider<AudioPlayerNotifier, AudioPlayerState>(
+final audioPlayerProvider = StateNotifierProvider<AudioPlayerNotifier, AudioPlayerState>(
   (ref) => AudioPlayerNotifier(),
 );
