@@ -9,8 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-    # ↓ ここから追加
-  flutter_launcher_icons: ^0.13.1
+
+  # ── 新機能：画面消灯防止 ──────────────────────────────────
+  wakelock_plus: ^1.2.10
 
   # ── 音声再生コア ──────────────────────────────────────────
   # バックグラウンド再生・Bluetooth対応の音声プレイヤー
@@ -44,7 +45,7 @@ dependencies:
   # パス文字列の操作（拡張子取得など）
   path: ^1.9.0
   # 音声ファイルのメタデータ抽出（アルバムアートワーク取得）
-  metadata_god: ^1.1.0  # ← 代わりにこれを追加
+  metadata_god: ^1.1.0
   # Android/iOSストレージ権限リクエスト
   permission_handler: ^11.3.1
 
@@ -53,7 +54,6 @@ dependencies:
   # Progress bar component for now playing screen
   audio_video_progress_bar: ^2.0.2
   just_audio_windows: ^0.2.3
-  # iOS音声出力切り替え（AirPlay/Bluetooth）- audio_sessionで実装
   # アートワークからドミナントカラーを抽出
   palette_generator: ^0.3.3
   scrollable_positioned_list: ^0.3.8
@@ -65,13 +65,13 @@ dev_dependencies:
   # Riverpod コード生成（将来 @riverpod アノテーションを使うとき）
   riverpod_generator: ^2.4.3
   build_runner: ^2.4.11
+  # アプリアイコン自動生成ツール
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
-  # assets:
-  #   - assets/images/  ← アルバムアートのデフォルト画像などを後で追加
 
-# ↓ ファイルの一番下あたりにこれを追加
+# アプリアイコンの設定
 flutter_launcher_icons:
   android: true
   ios: true
