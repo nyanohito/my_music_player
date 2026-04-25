@@ -1,16 +1,13 @@
 // ============================================================
 // widgets/song_info_sheet.dart
-// 曲情報シート（ファイルパス・ビットレート・コーデック・サイズ等）
-//
-// 使い方:
-//   SongInfoSheet.show(context, song);
-//
-// ライブラリ画面の「：」メニューや now_playing の設定から呼び出す
+// 曲情報シート（ファイルサイズ・形式等）
 // ============================================================
 
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/song.dart';
 import '../theme/app_theme.dart';
@@ -35,24 +32,20 @@ class SongInfoSheet extends StatelessWidget {
   Future<Map<String, String>> _loadFileInfo() async {
     final info = <String, String>{};
     try {
-      final file = File(song.path);
+      final appDir = await getApplicationDocumentsDirectory();
+      final fullPath = p.join(appDir.path, song.filePath);
+      final file = File(fullPath);
+
       if (await file.exists()) {
         final stat = await file.stat();
         final bytes = stat.size;
         info['ファイルサイズ'] = _formatBytes(bytes);
         info['更新日時'] = _formatDate(stat.modified);
-        info['ファイルパス'] = song.path;
+        info['ファイル名'] = song.filePath;
 
         // 拡張子からコーデックを推定
-        final ext = song.path.split('.').last.toUpperCase();
+        final ext = song.filePath.split('.').last.toUpperCase();
         info['形式'] = ext;
-
-        // ビットレートは duration から推定（正確ではないが参考値）
-        if (song.duration != null && song.duration!.inSeconds > 0) {
-          final bps = (bytes * 8) / song.duration!.inSeconds;
-          final kbps = (bps / 1000).round();
-          info['推定ビットレート'] = '~${kbps}kbps';
-        }
       }
     } catch (_) {
       info['エラー'] = 'ファイル情報を取得できませんでした';
@@ -71,13 +64,6 @@ class SongInfoSheet extends StatelessWidget {
         '${dt.day.toString().padLeft(2, '0')} '
         '${dt.hour.toString().padLeft(2, '0')}:'
         '${dt.minute.toString().padLeft(2, '0')}';
-  }
-
-  String _formatDuration(Duration? d) {
-    if (d == null) return '不明';
-    final m = d.inMinutes;
-    final s = d.inSeconds % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -153,8 +139,7 @@ class SongInfoSheet extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              const Divider(
-                  color: AppColors.surfaceVariant, height: 1),
+              const Divider(color: AppColors.surfaceVariant, height: 1),
 
               // ── 情報リスト ─────────────────────────────
               Expanded(
@@ -169,15 +154,8 @@ class SongInfoSheet extends StatelessWidget {
                     _InfoRow(
                         label: 'アーティスト',
                         value: song.artist.isEmpty ? '不明' : song.artist),
-                    if (song.album != null && song.album!.isNotEmpty)
-                      _InfoRow(label: 'アルバム', value: song.album!),
-                    _InfoRow(
-                        label: '再生時間',
-                        value: _formatDuration(song.duration)),
                     if (song.lyrics.isNotEmpty)
-                      _InfoRow(
-                          label: '歌詞',
-                          value: '${song.lyrics.length}行'),
+                      _InfoRow(label: '歌詞', value: '${song.lyrics.length}行'),
 
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 12),
@@ -217,8 +195,7 @@ class SongInfoSheet extends StatelessWidget {
                             ...info.entries.map((e) => _InfoRow(
                                   label: e.key,
                                   value: e.value,
-                                  copyable:
-                                      e.key == 'ファイルパス',
+                                  copyable: e.key == 'ファイル名',
                                 )),
                           ],
                         );
