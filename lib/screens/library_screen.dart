@@ -18,6 +18,7 @@ import '../models/song.dart';
 import '../utils/database_helper.dart';
 import '../widgets/mini_player_with_progress.dart';
 import '../widgets/playlist_selection_dialog.dart';
+import '../widgets/song_info_sheet.dart'; // 🚨 <== この1行を追加！！！
 
 enum FilterMode { all, favorites, playlists }
 
