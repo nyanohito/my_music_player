@@ -200,6 +200,8 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final List<Song> validSongs = [];
       final List<AudioSource> audioSources = [];
 
+      int loadedCount = 0;
+
       for (final song in savedSongs) {
         final fullPath = await _getFullPath(song.filePath);
 
@@ -229,22 +231,25 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
         validSongs.add(updatedSong);
 
+        // 🚨 致命的バグ修正：通信限界（MethodChannel）突破を防ぐため、artUriのBase64送信を完全に削除
         if (Platform.isAndroid || Platform.isIOS) {
-          String? artUri;
-          if (updatedSong.albumArt != null) {
-            artUri = Uri.dataFromBytes(updatedSong.albumArt!).toString();
-          }
           audioSources.add(AudioSource.uri(
             Uri.file(fullPath),
             tag: MediaItem(
               id: updatedSong.id,
               title: updatedSong.title,
               artist: updatedSong.artist,
-              artUri: artUri != null ? Uri.parse(artUri) : null,
+              artUri: null, // ← ここが110曲クラッシュの完全な原因でした。無効化して安全を確保。
             ),
           ));
         } else {
           audioSources.add(LocalFileStreamAudioSource(fullPath));
+        }
+
+        // 大量データの読み込み時にアプリが固まらないよう、10曲ごとに一瞬息継ぎ（メモリ解放）させる
+        loadedCount++;
+        if (loadedCount % 10 == 0) {
+          await Future.delayed(const Duration(milliseconds: 10));
         }
       }
 
@@ -370,7 +375,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
       for (final file in result.files) {
         if (file.path == null) continue;
-        // ★ 修正1: 同じ「01.mp3」でもフォルダが違えば別曲として扱う！
         final dir = p.dirname(file.path!);
         final name = p.basenameWithoutExtension(file.path!).toLowerCase();
         final key = '$dir/$name'; 
@@ -445,10 +449,14 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         final audioSources = <AudioSource>[];
         for (final song in allSongs) {
           final fullPath = await _getFullPath(song.filePath);
-          final audioSource = (Platform.isAndroid || Platform.isIOS)
-              ? AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist))
-              : LocalFileStreamAudioSource(fullPath);
-          audioSources.add(audioSource);
+          if (Platform.isAndroid || Platform.isIOS) {
+            audioSources.add(AudioSource.uri(
+              Uri.file(fullPath),
+              tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null),
+            ));
+          } else {
+            audioSources.add(LocalFileStreamAudioSource(fullPath));
+          }
         }
         final playlist = ConcatenatingAudioSource(children: audioSources);
         await _player.setAudioSource(playlist, initialIndex: previousLength);
@@ -468,7 +476,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     for (final song in newSongs) {
       final fullPath = await _getFullPath(song.filePath);
       final audioSource = (Platform.isAndroid || Platform.isIOS)
-          ? AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist))
+          ? AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null))
           : LocalFileStreamAudioSource(fullPath);
       newAudioSources.add(audioSource);
     }
@@ -523,7 +531,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       for (final file in filteredFiles) {
         if (file.path != null) {
           final extension = p.extension(file.path!).toLowerCase();
-          // ★ 修正2: 同じ「01.mp3」でもフォルダが違えば別曲として扱う！
           final dir = p.dirname(file.path!);
           final fileName = p.basenameWithoutExtension(file.path!).toLowerCase();
           final key = '$dir/$fileName'; 
@@ -604,17 +611,13 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         for (final song in allSongs) {
           final fullPath = await _getFullPath(song.filePath);
           if (Platform.isAndroid || Platform.isIOS) {
-            String? artUri;
-            if (song.albumArt != null) {
-              artUri = Uri.dataFromBytes(song.albumArt!).toString();
-            }
             audioSources.add(AudioSource.uri(
               Uri.file(fullPath),
               tag: MediaItem(
                 id: song.id,
                 title: song.title,
                 artist: song.artist,
-                artUri: artUri != null ? Uri.parse(artUri) : null,
+                artUri: null, // 🚨 ペイロード制限対策
               ),
             ));
           } else {
@@ -637,9 +640,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  // =========================================================
-  // ★ 修正3: iTunesファイル共有で転送した「フォルダ」に完全対応したスキャン！
-  // =========================================================
   Future<int> scanLocalDocuments() async {
     state = state.copyWith(isLoading: true);
     try {
@@ -671,10 +671,8 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       int processedCount = 0;
 
       for (final file in audioFiles) {
-        // ★ サブフォルダごと転送されたファイルにも対応するため「相対パス」を取得
         final relativePath = p.relative(file.path, from: appDir.path).replaceAll('\\', '/');
 
-        // すでにDBに同じ相対パスが存在すればスキップ
         if (existingPaths.contains(relativePath)) continue;
 
         try {
@@ -693,7 +691,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           }
 
           song = song.copyWith(
-            filePath: relativePath, // ★ ファイル名だけでなく、フォルダ情報も含めて保存
+            filePath: relativePath,
             lrcPath: relativeLrcPath,
             lyrics: lyrics,
           );
@@ -721,13 +719,9 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           for (final song in allSongs) {
             final fullPath = await _getFullPath(song.filePath);
             if (Platform.isAndroid || Platform.isIOS) {
-              String? artUri;
-              if (song.albumArt != null) {
-                artUri = Uri.dataFromBytes(song.albumArt!).toString();
-              }
               audioSources.add(AudioSource.uri(
                 Uri.file(fullPath),
-                tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: artUri != null ? Uri.parse(artUri) : null),
+                tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null), // 🚨 ペイロード制限対策
               ));
             } else {
               audioSources.add(LocalFileStreamAudioSource(fullPath));
@@ -967,6 +961,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
                   id: song.id,
                   title: song.title,
                   artist: song.artist,
+                  artUri: null, // 🚨 ペイロード制限対策
                 ),
               )
             : LocalFileStreamAudioSource(fullPath);
