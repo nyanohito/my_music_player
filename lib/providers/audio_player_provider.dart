@@ -27,7 +27,6 @@ enum PlaylistMode { off, one, all }
 
 class LocalFileStreamAudioSource extends StreamAudioSource {
   final String filePath;
-  
   LocalFileStreamAudioSource(this.filePath);
 
   @override
@@ -113,17 +112,14 @@ class AudioPlayerState {
     }
     return null;
   }
-
   bool get hasSongs => playlist.isNotEmpty;
   bool get hasCurrentSong => currentSong != null;
 }
 
 class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   final AudioPlayer _player = AudioPlayer();
-
   Stream<Duration> get positionStream => _player.positionStream;
   Stream<double> get volumeStream => _player.volumeStream;
-
   void setVolume(double value) => _player.setVolume(value);
 
   Future<void> setPlaybackSpeed(double speed) async {
@@ -143,15 +139,16 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   final DatabaseHelper _dbHelper = DatabaseHelper();
   StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<Duration?>? _durationSubscription;
+  StreamSubscription<PlayerState>? _playerStateSubscription;
+  StreamSubscription<int?>? _currentIndexSubscription;
 
   Future<String> _copyFileToLocalDirectory(String sourcePath) async {
     final sourceFile = File(sourcePath);
     if (!await sourceFile.exists()) throw Exception('Source file does not exist: $sourcePath');
-
     final appDir = await getApplicationDocumentsDirectory();
     final fileName = p.basename(sourcePath);
     final localPath = p.join(appDir.path, fileName);
-    
     final localFile = File(localPath);
     if (await localFile.exists()) {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -167,14 +164,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  Future<String> _getFullPath(String fileName) async {
+  Future<String> _getFullPath(String filePath) async {
+    if (p.isAbsolute(filePath)) return filePath;
     final appDir = await getApplicationDocumentsDirectory();
-    return p.join(appDir.path, fileName);
+    return p.join(appDir.path, filePath);
   }
-  
-  StreamSubscription<Duration?>? _durationSubscription;
-  StreamSubscription<PlayerState>? _playerStateSubscription;
-  StreamSubscription<int?>? _currentIndexSubscription;
 
   AudioPlayer get player => _player;
 
@@ -192,14 +186,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final List<Song> validSongs = [];
       final List<AudioSource> audioSources = [];
 
-      int loadedCount = 0;
-
       for (final song in savedSongs) {
         final fullPath = await _getFullPath(song.filePath);
         if (!await File(fullPath).exists()) continue;
 
-        final albumArt = await _extractAlbumArt(fullPath);
-
+        // 🚨 修正：起動時のアルバムアート読み込みを全廃止（メモリ爆発防止）
         List<LyricLine>? parsedLyrics;
         if (song.lrcPath != null && song.lrcPath!.isNotEmpty) {
           try {
@@ -213,30 +204,23 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }
 
         var updatedSong = song;
-        if (albumArt != null) updatedSong = updatedSong.copyWithAlbumArt(albumArt);
         if (parsedLyrics != null && parsedLyrics.isNotEmpty) {
           updatedSong = updatedSong.copyWith(lyrics: parsedLyrics);
         }
-
         validSongs.add(updatedSong);
 
         if (Platform.isAndroid || Platform.isIOS) {
           audioSources.add(AudioSource.uri(
             Uri.file(fullPath),
             tag: MediaItem(
-              id: updatedSong.id,
-              title: updatedSong.title,
-              artist: updatedSong.artist,
-              artUri: null, 
+              id: updatedSong.id, 
+              title: updatedSong.title, 
+              artist: updatedSong.artist, 
+              artUri: null // 🚨 ここがクラッシュの原因でした
             ),
           ));
         } else {
           audioSources.add(LocalFileStreamAudioSource(fullPath));
-        }
-
-        loadedCount++;
-        if (loadedCount % 10 == 0) {
-          await Future.delayed(const Duration(milliseconds: 10));
         }
       }
 
@@ -258,7 +242,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   void _subscribeToPlayerStreams() {
     _positionSubscription = _player.positionStream.listen((position) {
-      final safePosition = state.duration != null && position > state.duration! ? state.duration! : position;
+      final safePosition = position > state.duration ? state.duration : position;
       final lyricIndex = _getCurrentLyricIndex(state.currentSong?.lyrics ?? [], safePosition);
       state = state.copyWith(position: safePosition, currentLyricIndex: lyricIndex);
     });
@@ -279,41 +263,36 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     });
 
     _currentIndexSubscription = _player.currentIndexStream.listen((index) {
-      if (index != null && state.currentSongIndex != index) {
-        final song = state.playlist[index!];
-        if (song != null) DatabaseHelper().addPlayHistory(song.id);
-      }
-      if (index != null && index >= 0 && index < state.playlist.length) {
+      if (index == null) return;
+      // 🚨 修正：クラッシュ防止の bounds check
+      if (index >= 0 && index < state.playlist.length) {
+        if (state.currentSongIndex != index) {
+          final song = state.playlist[index];
+          DatabaseHelper().addPlayHistory(song.id);
+        }
         state = state.copyWith(currentSongIndex: index);
       }
     });
   }
 
-  // 🚀 致命的バグ修正：無限待機を防ぐためのタイムアウト（2秒）を導入
   Future<Uint8List?> _extractAlbumArt(String filePath) async {
     try {
-      final metadata = await MetadataGod.readMetadata(file: filePath)
-          .timeout(const Duration(seconds: 2));
+      final metadata = await MetadataGod.readMetadata(file: filePath).timeout(const Duration(seconds: 2));
       return metadata.picture?.data;
     } catch (e) {
       return null;
     }
   }
 
-  // 🚀 致命的バグ修正：無限待機を防ぐためのタイムアウト（2秒）を導入
   Future<Song> _createSongFromMetadata(String absolutePath) async {
     try {
-      final metadata = await MetadataGod.readMetadata(file: absolutePath)
-          .timeout(const Duration(seconds: 2));
+      final metadata = await MetadataGod.readMetadata(file: absolutePath).timeout(const Duration(seconds: 2));
       final String title = p.basenameWithoutExtension(absolutePath);
       final String rawArtist = metadata.artist ?? '';
-      final String artist = (rawArtist.isEmpty || rawArtist.toLowerCase().contains('unknown'))
-          ? 'Mrs. GREEN APPLE' : rawArtist;
+      final String artist = (rawArtist.isEmpty || rawArtist.toLowerCase().contains('unknown')) ? 'Mrs. GREEN APPLE' : rawArtist;
       final String fileName = p.basename(absolutePath);
-
       return Song(id: const Uuid().v4(), title: title, artist: artist, filePath: fileName);
     } catch (e) {
-      // タイムアウトまたはエラー時は、ファイル名から強制的に曲データを作成してスキップを防ぐ
       final String fileName = p.basename(absolutePath);
       final song = Song.fromPath(fileName);
       final String rawArtist = song.artist ?? '';
@@ -324,7 +303,24 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  // ★ iTunesフォルダ転送からのスキャン
+  /// 🚨 新設：再生ボタンを押した時だけ、その1曲分の画像を読み込む（究極のメモリ節約）
+  Future<void> loadAlbumArtForCurrentSong() async {
+    final song = state.currentSong;
+    if (song == null || song.albumArt != null) return; 
+
+    try {
+      final fullPath = await _getFullPath(song.filePath);
+      final albumArt = await _extractAlbumArt(fullPath);
+      if (albumArt == null) return;
+
+      final updatedPlaylist = List<Song>.from(state.playlist);
+      final idx = state.currentSongIndex;
+      if (idx < 0 || idx >= updatedPlaylist.length) return;
+      updatedPlaylist[idx] = updatedPlaylist[idx].copyWithAlbumArt(albumArt);
+      state = state.copyWith(playlist: updatedPlaylist);
+    } catch (_) {}
+  }
+
   Future<int> scanLocalDocuments() async {
     state = state.copyWith(isLoading: true);
     try {
@@ -357,16 +353,13 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
       for (final file in audioFiles) {
         final relativePath = p.relative(file.path, from: appDir.path).replaceAll('\\', '/');
-
         if (existingPaths.contains(relativePath)) continue;
 
         try {
           var song = await _createSongFromMetadata(file.path);
-          final albumArt = await _extractAlbumArt(file.path);
-          if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
+          // 🚨 スキャン時のアルバムアート抽出を完全削除！ここでは行わない！
 
           final key = file.path.substring(0, file.path.length - p.extension(file.path).length);
-          
           String? relativeLrcPath;
           List<LyricLine> lyrics = [];
           if (lrcFiles.containsKey(key)) {
@@ -376,17 +369,13 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           }
 
           song = song.copyWith(filePath: relativePath, lrcPath: relativeLrcPath, lyrics: lyrics);
-
           await _dbHelper.insertOrUpdateSong(song);
           newSongs.add(song);
 
           processedCount++;
-          // 負荷軽減のため50曲ごとに息継ぎ
-          if (processedCount % 50 == 0) {
-            await Future.delayed(const Duration(milliseconds: 10));
-          }
-        } catch (e) {
-          continue; // エラーがあっても絶対に止まらず次の曲へ！
+          if (processedCount % 50 == 0) await Future.delayed(const Duration(milliseconds: 10));
+        } catch (_) {
+          continue; 
         }
       }
 
@@ -400,10 +389,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           for (final song in allSongs) {
             final fullPath = await _getFullPath(song.filePath);
             if (Platform.isAndroid || Platform.isIOS) {
-              audioSources.add(AudioSource.uri(
-                Uri.file(fullPath),
-                tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null), 
-              ));
+              audioSources.add(AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null)));
             } else {
               audioSources.add(LocalFileStreamAudioSource(fullPath));
             }
@@ -427,8 +413,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   Future<void> pickAndLoadSong() async {
     try {
       final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.custom,
+        allowMultiple: true, type: FileType.custom,
         allowedExtensions: ['mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif', 'lrc'],
       );
       if (result == null || result.files.isEmpty) return;
@@ -441,8 +426,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         if (file.path == null) continue;
         final dir = p.dirname(file.path!);
         final name = p.basenameWithoutExtension(file.path!).toLowerCase();
-        final key = '$dir/$name'; 
-        groups.putIfAbsent(key, () => []).add(file);
+        groups.putIfAbsent('$dir/$name', () => []).add(file);
       }
 
       const audioExtensions = {'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif'};
@@ -455,11 +439,8 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
           for (final f in files) {
             final ext = p.extension(f.path!).replaceFirst('.', '').toLowerCase();
-            if (ext == 'lrc') {
-              lrcFile = f;
-            } else if (audioExtensions.contains(ext)) {
-              audioFile = f;
-            }
+            if (ext == 'lrc') lrcFile = f;
+            else if (audioExtensions.contains(ext)) audioFile = f;
           }
 
           if (audioFile == null || audioFile.path == null) continue;
@@ -468,8 +449,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           final audioFullPath = await _getFullPath(audioFileName);
           
           var song = await _createSongFromMetadata(audioFullPath);
-          final albumArt = await _extractAlbumArt(audioFullPath);
-          if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
+          // 🚨 メモリ爆発防止：ここでの抽出も削除！
 
           String? lrcFileName;
           List<LyricLine> parsedLyrics = [];
@@ -483,16 +463,10 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             } catch (_) {}
           }
 
-          song = song.copyWith(
-            filePath: song.filePath.split('/').last, 
-            lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null,
-          );
-          
+          song = song.copyWith(filePath: song.filePath.split('/').last, lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null);
           await _dbHelper.insertOrUpdateSong(song);
           newSongs.add(song);
-        } catch (_) {
-          continue;
-        }
+        } catch (_) { continue; }
       }
 
       final previousLength = state.playlist.length;
@@ -504,10 +478,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         for (final song in allSongs) {
           final fullPath = await _getFullPath(song.filePath);
           if (Platform.isAndroid || Platform.isIOS) {
-            audioSources.add(AudioSource.uri(
-              Uri.file(fullPath),
-              tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null),
-            ));
+            audioSources.add(AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null)));
           } else {
             audioSources.add(LocalFileStreamAudioSource(fullPath));
           }
@@ -573,8 +544,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
             final audioFullPath = await _getFullPath(audioFileName);
             var song = await _createSongFromMetadata(audioFullPath);
-            final albumArt = await _extractAlbumArt(audioFullPath);
-            if (albumArt != null) song = song.copyWithAlbumArt(albumArt);
+            // 🚨 メモリ爆発防止：ここでの抽出も削除！
             
             if (lrcFile != null && lrcFile.path != null) {
               final lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
@@ -607,10 +577,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         for (final song in allSongs) {
           final fullPath = await _getFullPath(song.filePath);
           if (Platform.isAndroid || Platform.isIOS) {
-            audioSources.add(AudioSource.uri(
-              Uri.file(fullPath),
-              tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null),
-            ));
+            audioSources.add(AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null)));
           } else {
             audioSources.add(LocalFileStreamAudioSource(fullPath));
           }
@@ -664,7 +631,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     state = state.copyWith(currentSongIndex: index);
     await _player.seek(Duration.zero, index: index);
     await _player.play();
+    
+    // 🚨 修正：再生開始時に1曲だけアルバムアートを読み込む！
+    loadAlbumArtForCurrentSong();
   }
+
   Future<void> playNext() async {
     if (state.playlist.isEmpty) return;
     int nextIndex = state.currentSongIndex + 1;
@@ -673,6 +644,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
     await playSongAtIndex(nextIndex);
   }
+
   Future<void> playPrevious() async {
     if (state.playlist.isEmpty) return;
     int prevIndex = state.currentSongIndex - 1;
@@ -681,11 +653,13 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
     await playSongAtIndex(prevIndex);
   }
+
   Future<void> toggleShuffle() async {
     final newShuffleState = !state.isShuffleModeEnabled;
     state = state.copyWith(isShuffleModeEnabled: newShuffleState);
     await _player.setShuffleModeEnabled(newShuffleState);
   }
+
   Future<void> toggleFavorite(String songId) async {
     try {
       await _dbHelper.toggleFavorite(songId);
@@ -698,12 +672,15 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(errorMessage: 'Failed to toggle favorite: $e');
     }
   }
+
   Future<List<Song>> searchSongs(String query) async {
     return await _dbHelper.searchSongs(query);
   }
+
   Future<List<Song>> getFavoriteSongs() async {
     return await _dbHelper.getFavoriteSongs();
   }
+
   Future<void> removeSong(String songId) async {
     try {
       final songIndex = state.playlist.indexWhere((song) => song.id == songId);
@@ -725,6 +702,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(errorMessage: 'Failed to remove song: $e');
     }
   }
+
   Future<void> toggleRepeat() async {
     PlaylistMode newMode;
     switch (state.repeatMode) {
@@ -741,15 +719,19 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
     await _player.setLoopMode(loopMode);
   }
+
   Future<void> loadSong(Song song) async {
     await _loadPlaylist([song], 0);
   }
+
   Future<void> togglePlayPause() async {
     if (_player.playing) await _player.pause(); else await _player.play();
   }
+
   Future<void> play() async => await _player.play();
   Future<void> pause() async => await _player.pause();
   Future<void> seekTo(Duration position) async => await _player.seek(position);
+
   Future<void> createPlaylist(String name) async {
     try {
       final playlistId = await _dbHelper.createPlaylist(name);
@@ -757,17 +739,20 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(playlists: updatedPlaylists);
     } catch (e) {}
   }
+
   Future<void> addSongToPlaylist(String songId, String playlistId) async {
     try {
       await _dbHelper.addSongToPlaylist(playlistId, songId);
     } catch (e) {}
   }
+
   Future<void> loadPlaylists() async {
     try {
       final playlists = await _dbHelper.getAllPlaylists();
       state = state.copyWith(playlists: playlists);
     } catch (e) {}
   }
+
   Future<void> _loadPlaylist(List<Song> playlist, int startIndex) async {
     try {
       state = state.copyWith(isLoading: true, clearError: true);
@@ -782,10 +767,14 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       await _player.setAudioSource(concatenatingSource, initialPosition: Duration.zero, preload: false);
       if (startIndex > 0) await _player.seek(Duration.zero, index: startIndex);
       await _player.play();
+      
+      // 🚨 修正：プレイリストロード時にも最初の曲のアルバムアートを読み込む
+      loadAlbumArtForCurrentSong();
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: 'Failed to load playlist: $e');
     }
   }
+
   int _getCurrentLyricIndex(List<LyricLine> lyrics, Duration position) {
     if (lyrics.isEmpty) return -1;
     final offsetMs = state.currentSong?.lyricOffset ?? 0;
@@ -796,6 +785,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
     return index;
   }
+
   Future<void> updateSongLrcPath(String songId, String lrcPath) async {
     try {
       final lrcFileName = await _copyFileToLocalDirectory(lrcPath);
@@ -809,6 +799,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(playlist: updatedPlaylist);
     } catch (e) {}
   }
+
   Future<void> updateLyricOffset(String songId, int deltaMs) async {
     try {
       final songIndex = state.playlist.indexWhere((s) => s.id == songId);
@@ -821,6 +812,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       state = state.copyWith(playlist: updatedPlaylist);
     } catch (e) {}
   }
+
   Future<List<LyricLine>> _parseLrcFile(String lrcPath) async {
     try {
       final file = File(lrcPath);
