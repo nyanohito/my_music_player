@@ -1,6 +1,6 @@
 // ============================================================
 // providers/audio_player_provider.dart
-// ★ 【全方位・超診断モード】すべての追加ボタンを監視する
+// ★ 【完全版】画像読み込みを無効化し、堅牢性を最大化したプレイヤー
 // ============================================================
 
 import 'dart:async';
@@ -284,13 +284,9 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     });
   }
 
+  // 🚀 修正：画像読み込み機能を完全に無効化（エラー原因の徹底排除）
   Future<Uint8List?> _extractAlbumArt(String filePath) async {
-    try {
-      final metadata = await MetadataGod.readMetadata(file: filePath).timeout(const Duration(seconds: 2));
-      return metadata.picture?.data;
-    } catch (e) {
-      return null;
-    }
+    return null;
   }
 
   Future<Song> _createSongFromMetadata(String absolutePath) async {
@@ -312,26 +308,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
+  // 🚀 修正：画像読み込みを行わないため、中身を空にして即終了
   Future<void> loadAlbumArtForCurrentSong() async {
-    final song = state.currentSong;
-    if (song == null || song.albumArt != null) return; 
-
-    try {
-      final fullPath = await _getFullPath(song.filePath);
-      final albumArt = await _extractAlbumArt(fullPath);
-      if (albumArt == null) return;
-
-      final updatedPlaylist = List<Song>.from(state.playlist);
-      final idx = state.currentSongIndex;
-      if (idx < 0 || idx >= updatedPlaylist.length) return;
-      updatedPlaylist[idx] = updatedPlaylist[idx].copyWithAlbumArt(albumArt);
-      state = state.copyWith(playlist: updatedPlaylist);
-    } catch (_) {}
+    return;
   }
 
-  // =======================================================
-  // 1. 「ファイルを追加」ボタンの実況コード
-  // =======================================================
   Future<void> pickAndLoadSong() async {
     _log('ファイル選択画面を開きます...');
     try {
@@ -443,9 +424,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  // =======================================================
-  // 2. 「フォルダを追加」ボタンの実況コード
-  // =======================================================
   Future<int> pickAndLoadFolder() async {
     _log('フォルダ選択画面を開きます...');
     try {
@@ -565,9 +543,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  // =======================================================
-  // 3. 「PC転送スキャン」ボタンの実況コード
-  // =======================================================
   Future<int> scanLocalDocuments() async {
     state = state.copyWith(isLoading: true);
     _log('スキャン開始: フォルダ内を検索中...');
@@ -709,7 +684,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     state = state.copyWith(currentSongIndex: index);
     await _player.seek(Duration.zero, index: index);
     await _player.play();
-    loadAlbumArtForCurrentSong();
   }
 
   Future<void> playNext() async {
@@ -843,8 +817,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       await _player.setAudioSource(concatenatingSource, initialPosition: Duration.zero, preload: false);
       if (startIndex > 0) await _player.seek(Duration.zero, index: startIndex);
       await _player.play();
-      
-      loadAlbumArtForCurrentSong();
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: '再生エラー: $e');
     }
