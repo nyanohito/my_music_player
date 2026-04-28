@@ -1,6 +1,6 @@
 // ============================================================
 // providers/audio_player_provider.dart
-// ★ アプリの心臓部：音楽再生の全状態とロジックを管理する
+// ★ 【超・診断モード】処理をリアルタイムで画面に実況する
 // ============================================================
 
 import 'dart:async';
@@ -133,7 +133,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       }
       state = state.copyWith(playbackSpeed: safeSpeed);
     } catch (e) {
-      state = state.copyWith(errorMessage: '速度変更エラー: $e');
+      _logError('速度変更エラー: $e');
     }
   }
 
@@ -142,6 +142,19 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
   StreamSubscription<int?>? _currentIndexSubscription;
+
+  // --- 📝 ログ管理用ヘルパー ---
+  void _log(String message) {
+    print('[DIAGNOSTICS] $message');
+    // UIを更新して最新の状態を表示
+    state = state.copyWith(errorMessage: message);
+  }
+
+  void _logError(String message) {
+    print('[DIAGNOSTICS_ERROR] $message');
+    state = state.copyWith(errorMessage: '❌ $message');
+  }
+  // -----------------------------
 
   Future<String> _copyFileToLocalDirectory(String sourcePath) async {
     final sourceFile = File(sourcePath);
@@ -180,8 +193,11 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   Future<void> _loadSavedSongs() async {
     try {
+      _log('DBから曲を読み込み中...');
       final savedSongs = await _dbHelper.getAllSongs();
       final playlists = await _dbHelper.getAllPlaylists();
+
+      _log('DBに ${savedSongs.length} 曲ありました。');
 
       final List<Song> validSongs = [];
       final List<AudioSource> audioSources = [];
@@ -190,7 +206,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         final fullPath = await _getFullPath(song.filePath);
         if (!await File(fullPath).exists()) continue;
 
-        // 🚨 修正：起動時のアルバムアート読み込みを全廃止（メモリ爆発防止）
         List<LyricLine>? parsedLyrics;
         if (song.lrcPath != null && song.lrcPath!.isNotEmpty) {
           try {
@@ -216,7 +231,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
               id: updatedSong.id, 
               title: updatedSong.title, 
               artist: updatedSong.artist, 
-              artUri: null // 🚨 ここがクラッシュの原因でした
+              artUri: null
             ),
           ));
         } else {
@@ -230,8 +245,9 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         final playlist = ConcatenatingAudioSource(children: audioSources);
         await _player.setAudioSource(playlist, initialPosition: Duration.zero, preload: false);
       }
+      _log('起動完了: 有効な曲は ${validSongs.length} 曲です。');
     } catch (e) {
-      print('起動時ロードエラー: $e');
+      _logError('起動時ロードエラー: $e');
     }
   }
 
@@ -264,7 +280,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
     _currentIndexSubscription = _player.currentIndexStream.listen((index) {
       if (index == null) return;
-      // 🚨 修正：クラッシュ防止の bounds check
       if (index >= 0 && index < state.playlist.length) {
         if (state.currentSongIndex != index) {
           final song = state.playlist[index];
@@ -303,7 +318,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
-  /// 🚨 新設：再生ボタンを押した時だけ、その1曲分の画像を読み込む（究極のメモリ節約）
   Future<void> loadAlbumArtForCurrentSong() async {
     final song = state.currentSong;
     if (song == null || song.albumArt != null) return; 
@@ -321,8 +335,10 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     } catch (_) {}
   }
 
+  // ★ 究極の診断機能付きスキャン
   Future<int> scanLocalDocuments() async {
     state = state.copyWith(isLoading: true);
+    _log('スキャン開始: フォルダを検索中...');
     try {
       final appDir = await getApplicationDocumentsDirectory();
       final List<FileSystemEntity> entities = await appDir.list(recursive: true).toList();
@@ -343,23 +359,37 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }
       }
 
-      if (audioFiles.isEmpty) return 0;
+      _log('見つかった音声ファイル: ${audioFiles.length}個');
+
+      if (audioFiles.isEmpty) {
+        _logError('音声ファイルが1つも見つかりません。');
+        return 0;
+      }
 
       final existingSongs = await _dbHelper.getAllSongs();
       final existingPaths = existingSongs.map((s) => s.filePath).toSet();
 
       final List<Song> newSongs = [];
       int processedCount = 0;
+      int skippedCount = 0;
+      int errorCount = 0;
 
       for (final file in audioFiles) {
         final relativePath = p.relative(file.path, from: appDir.path).replaceAll('\\', '/');
-        if (existingPaths.contains(relativePath)) continue;
+
+        if (existingPaths.contains(relativePath)) {
+          skippedCount++;
+          continue;
+        }
 
         try {
+          _log('処理中 (${processedCount + 1}/${audioFiles.length}): ${p.basename(file.path)}');
+          
           var song = await _createSongFromMetadata(file.path);
-          // 🚨 スキャン時のアルバムアート抽出を完全削除！ここでは行わない！
+          // スキャン時のアルバムアート抽出は行わない（メモリ保護）
 
           final key = file.path.substring(0, file.path.length - p.extension(file.path).length);
+          
           String? relativeLrcPath;
           List<LyricLine> lyrics = [];
           if (lrcFiles.containsKey(key)) {
@@ -369,17 +399,27 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           }
 
           song = song.copyWith(filePath: relativePath, lrcPath: relativeLrcPath, lyrics: lyrics);
+
+          _log('DBへ保存開始: ${song.title}');
           await _dbHelper.insertOrUpdateSong(song);
           newSongs.add(song);
 
           processedCount++;
-          if (processedCount % 50 == 0) await Future.delayed(const Duration(milliseconds: 10));
-        } catch (_) {
+          
+          // 強制的にUIを更新させるための短い待機
+          await Future.delayed(const Duration(milliseconds: 50));
+
+        } catch (e) {
+          errorCount++;
+          _logError('ファイルエラー (${p.basename(file.path)}): $e');
+          // エラーを見やすくするため少し待つ
+          await Future.delayed(const Duration(milliseconds: 500));
           continue; 
         }
       }
 
       if (newSongs.isNotEmpty) {
+        _log('AudioSourceを構築中...');
         final previousLength = state.playlist.length;
         final allSongs = [...state.playlist, ...newSongs];
         state = state.copyWith(playlist: allSongs);
@@ -389,7 +429,10 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           for (final song in allSongs) {
             final fullPath = await _getFullPath(song.filePath);
             if (Platform.isAndroid || Platform.isIOS) {
-              audioSources.add(AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null)));
+              audioSources.add(AudioSource.uri(
+                Uri.file(fullPath),
+                tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null), 
+              ));
             } else {
               audioSources.add(LocalFileStreamAudioSource(fullPath));
             }
@@ -401,16 +444,24 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           await _appendSongsToCurrentPlaylist(newSongs);
         }
       }
+      
+      _log('完了! 追加:${newSongs.length}, スキップ:$skippedCount, エラー:$errorCount');
       return newSongs.length;
     } catch (e) {
-      state = state.copyWith(errorMessage: 'スキャンに失敗しました: $e');
+      _logError('スキャン全体がクラッシュ: $e');
       return 0;
     } finally {
       state = state.copyWith(isLoading: false);
+      // 3秒後にメッセージを消す
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) state = state.copyWith(clearError: true);
+      });
     }
   }
 
+  // --- 他の機能は変更なし（長くなるので省略せずそのまま保持します） ---
   Future<void> pickAndLoadSong() async {
+    // 省略せずにそのままにする
     try {
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: true, type: FileType.custom,
@@ -449,7 +500,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           final audioFullPath = await _getFullPath(audioFileName);
           
           var song = await _createSongFromMetadata(audioFullPath);
-          // 🚨 メモリ爆発防止：ここでの抽出も削除！
 
           String? lrcFileName;
           List<LyricLine> parsedLyrics = [];
@@ -544,7 +594,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             final audioFileName = await _copyFileToLocalDirectory(audioFile.path!);
             final audioFullPath = await _getFullPath(audioFileName);
             var song = await _createSongFromMetadata(audioFullPath);
-            // 🚨 メモリ爆発防止：ここでの抽出も削除！
             
             if (lrcFile != null && lrcFile.path != null) {
               final lrcFileName = await _copyFileToLocalDirectory(lrcFile.path!);
@@ -631,8 +680,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     state = state.copyWith(currentSongIndex: index);
     await _player.seek(Duration.zero, index: index);
     await _player.play();
-    
-    // 🚨 修正：再生開始時に1曲だけアルバムアートを読み込む！
     loadAlbumArtForCurrentSong();
   }
 
@@ -768,7 +815,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       if (startIndex > 0) await _player.seek(Duration.zero, index: startIndex);
       await _player.play();
       
-      // 🚨 修正：プレイリストロード時にも最初の曲のアルバムアートを読み込む
       loadAlbumArtForCurrentSong();
     } catch (e) {
       state = state.copyWith(isLoading: false, errorMessage: 'Failed to load playlist: $e');
