@@ -1,6 +1,6 @@
 // ============================================================
 // providers/audio_player_provider.dart
-// ★ 【超・診断モード】処理をリアルタイムで画面に実況する
+// ★ 【全方位・超診断モード】すべての追加ボタンを監視する
 // ============================================================
 
 import 'dart:async';
@@ -146,7 +146,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   // --- 📝 ログ管理用ヘルパー ---
   void _log(String message) {
     print('[DIAGNOSTICS] $message');
-    // UIを更新して最新の状態を表示
     state = state.copyWith(errorMessage: message);
   }
 
@@ -227,12 +226,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         if (Platform.isAndroid || Platform.isIOS) {
           audioSources.add(AudioSource.uri(
             Uri.file(fullPath),
-            tag: MediaItem(
-              id: updatedSong.id, 
-              title: updatedSong.title, 
-              artist: updatedSong.artist, 
-              artUri: null
-            ),
+            tag: MediaItem(id: updatedSong.id, title: updatedSong.title, artist: updatedSong.artist, artUri: null),
           ));
         } else {
           audioSources.add(LocalFileStreamAudioSource(fullPath));
@@ -335,141 +329,30 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     } catch (_) {}
   }
 
-  // ★ 究極の診断機能付きスキャン
-  Future<int> scanLocalDocuments() async {
-    state = state.copyWith(isLoading: true);
-    _log('スキャン開始: フォルダを検索中...');
-    try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final List<FileSystemEntity> entities = await appDir.list(recursive: true).toList();
-
-      final audioExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac'];
-      final List<File> audioFiles = [];
-      final Map<String, File> lrcFiles = {};
-
-      for (final entity in entities) {
-        if (entity is File) {
-          final ext = p.extension(entity.path).toLowerCase();
-          if (audioExtensions.contains(ext)) {
-            audioFiles.add(entity);
-          } else if (ext == '.lrc') {
-            final key = entity.path.substring(0, entity.path.length - ext.length);
-            lrcFiles[key] = entity;
-          }
-        }
-      }
-
-      _log('見つかった音声ファイル: ${audioFiles.length}個');
-
-      if (audioFiles.isEmpty) {
-        _logError('音声ファイルが1つも見つかりません。');
-        return 0;
-      }
-
-      final existingSongs = await _dbHelper.getAllSongs();
-      final existingPaths = existingSongs.map((s) => s.filePath).toSet();
-
-      final List<Song> newSongs = [];
-      int processedCount = 0;
-      int skippedCount = 0;
-      int errorCount = 0;
-
-      for (final file in audioFiles) {
-        final relativePath = p.relative(file.path, from: appDir.path).replaceAll('\\', '/');
-
-        if (existingPaths.contains(relativePath)) {
-          skippedCount++;
-          continue;
-        }
-
-        try {
-          _log('処理中 (${processedCount + 1}/${audioFiles.length}): ${p.basename(file.path)}');
-          
-          var song = await _createSongFromMetadata(file.path);
-          // スキャン時のアルバムアート抽出は行わない（メモリ保護）
-
-          final key = file.path.substring(0, file.path.length - p.extension(file.path).length);
-          
-          String? relativeLrcPath;
-          List<LyricLine> lyrics = [];
-          if (lrcFiles.containsKey(key)) {
-            final lrcFile = lrcFiles[key]!;
-            lyrics = await _parseLrcFile(lrcFile.path);
-            relativeLrcPath = p.relative(lrcFile.path, from: appDir.path).replaceAll('\\', '/');
-          }
-
-          song = song.copyWith(filePath: relativePath, lrcPath: relativeLrcPath, lyrics: lyrics);
-
-          _log('DBへ保存開始: ${song.title}');
-          await _dbHelper.insertOrUpdateSong(song);
-          newSongs.add(song);
-
-          processedCount++;
-          
-          // 強制的にUIを更新させるための短い待機
-          await Future.delayed(const Duration(milliseconds: 50));
-
-        } catch (e) {
-          errorCount++;
-          _logError('ファイルエラー (${p.basename(file.path)}): $e');
-          // エラーを見やすくするため少し待つ
-          await Future.delayed(const Duration(milliseconds: 500));
-          continue; 
-        }
-      }
-
-      if (newSongs.isNotEmpty) {
-        _log('AudioSourceを構築中...');
-        final previousLength = state.playlist.length;
-        final allSongs = [...state.playlist, ...newSongs];
-        state = state.copyWith(playlist: allSongs);
-
-        if (_player.audioSource == null) {
-          final audioSources = <AudioSource>[];
-          for (final song in allSongs) {
-            final fullPath = await _getFullPath(song.filePath);
-            if (Platform.isAndroid || Platform.isIOS) {
-              audioSources.add(AudioSource.uri(
-                Uri.file(fullPath),
-                tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null), 
-              ));
-            } else {
-              audioSources.add(LocalFileStreamAudioSource(fullPath));
-            }
-          }
-          final playlist = ConcatenatingAudioSource(children: audioSources);
-          await _player.setAudioSource(playlist, initialIndex: previousLength);
-          _player.play();
-        } else {
-          await _appendSongsToCurrentPlaylist(newSongs);
-        }
-      }
-      
-      _log('完了! 追加:${newSongs.length}, スキップ:$skippedCount, エラー:$errorCount');
-      return newSongs.length;
-    } catch (e) {
-      _logError('スキャン全体がクラッシュ: $e');
-      return 0;
-    } finally {
-      state = state.copyWith(isLoading: false);
-      // 3秒後にメッセージを消す
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) state = state.copyWith(clearError: true);
-      });
-    }
-  }
-
-  // --- 他の機能は変更なし（長くなるので省略せずそのまま保持します） ---
+  // =======================================================
+  // 1. 「ファイルを追加」ボタンの実況コード
+  // =======================================================
   Future<void> pickAndLoadSong() async {
-    // 省略せずにそのままにする
+    _log('ファイル選択画面を開きます...');
     try {
       final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true, type: FileType.custom,
+        allowMultiple: true, 
+        type: FileType.custom,
         allowedExtensions: ['mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif', 'lrc'],
       );
-      if (result == null || result.files.isEmpty) return;
+      
+      if (result == null) {
+        _logError('キャンセル、またはiOSメモリ限界で強制終了しました。');
+        return;
+      }
+      if (result.files.isEmpty) {
+        _logError('選択されたファイルが0件です。');
+        return;
+      }
 
       state = state.copyWith(isLoading: true);
+      _log('${result.files.length}件のファイルを処理中...');
+      
       final List<Song> newSongs = [];
       final Map<String, List<PlatformFile>> groups = {};
 
@@ -481,6 +364,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       }
 
       const audioExtensions = {'mp3', 'flac', 'aac', 'm4a', 'wav', 'ogg', 'opus', 'wma', 'alac', 'aiff', 'aif'};
+      int processedCount = 0;
 
       for (final entry in groups.entries) {
         try {
@@ -516,7 +400,16 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           song = song.copyWith(filePath: song.filePath.split('/').last, lrcPath: song.lrcPath != null ? song.lrcPath!.split('/').last : null);
           await _dbHelper.insertOrUpdateSong(song);
           newSongs.add(song);
-        } catch (_) { continue; }
+
+          processedCount++;
+          if (processedCount % 10 == 0) {
+            _log('$processedCount曲 読み込み完了...');
+            await Future.delayed(const Duration(milliseconds: 50));
+          }
+        } catch (e) { 
+          _logError('エラー: $e');
+          continue; 
+        }
       }
 
       final previousLength = state.playlist.length;
@@ -539,19 +432,37 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       } else {
         await _appendSongsToCurrentPlaylist(newSongs);
       }
+      _log('完了！新しく ${newSongs.length} 曲追加しました。');
     } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to load songs: $e');
+      _logError('全体エラー発生: $e');
     } finally {
       state = state.copyWith(isLoading: false);
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) state = state.copyWith(clearError: true);
+      });
     }
   }
 
+  // =======================================================
+  // 2. 「フォルダを追加」ボタンの実況コード
+  // =======================================================
   Future<int> pickAndLoadFolder() async {
+    _log('フォルダ選択画面を開きます...');
     try {
       final result = await FilePicker.platform.pickFiles(type: FileType.any, allowMultiple: true);
-      if (result == null || result.files.isEmpty) return 0;
+      
+      if (result == null) {
+        _logError('キャンセル、またはiOSメモリ限界で強制終了しました。');
+        return 0;
+      }
+      if (result.files.isEmpty) {
+        _logError('選択されたファイルが0件です。');
+        return 0;
+      }
 
       state = state.copyWith(isLoading: true);
+      _log('${result.files.length}件のファイルを処理中...');
+
       final List<Song> newSongs = [];
       final allowedExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac', '.lrc'];
       final filteredFiles = result.files.where((file) {
@@ -610,8 +521,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
             newSongs.add(song);
 
             processedCount++;
-            if (processedCount % 10 == 0) await Future.delayed(const Duration(milliseconds: 50));
-          } catch (_) {
+            if (processedCount % 10 == 0) {
+              _log('$processedCount曲 読み込み完了...');
+              await Future.delayed(const Duration(milliseconds: 50));
+            }
+          } catch (e) {
+            _logError('エラー: $e');
             continue; 
           }
         }
@@ -637,15 +552,129 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       } else {
         await _appendSongsToCurrentPlaylist(newSongs);
       }
+      _log('完了！新しく ${newSongs.length} 曲追加しました。');
       return newSongs.length;
     } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to load files: $e');
+      _logError('全体エラー発生: $e');
       return 0;
     } finally {
       state = state.copyWith(isLoading: false);
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) state = state.copyWith(clearError: true);
+      });
     }
   }
-  
+
+  // =======================================================
+  // 3. 「PC転送スキャン」ボタンの実況コード
+  // =======================================================
+  Future<int> scanLocalDocuments() async {
+    state = state.copyWith(isLoading: true);
+    _log('スキャン開始: フォルダ内を検索中...');
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final List<FileSystemEntity> entities = await appDir.list(recursive: true).toList();
+
+      final audioExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac'];
+      final List<File> audioFiles = [];
+      final Map<String, File> lrcFiles = {};
+
+      for (final entity in entities) {
+        if (entity is File) {
+          final ext = p.extension(entity.path).toLowerCase();
+          if (audioExtensions.contains(ext)) {
+            audioFiles.add(entity);
+          } else if (ext == '.lrc') {
+            final key = entity.path.substring(0, entity.path.length - ext.length);
+            lrcFiles[key] = entity;
+          }
+        }
+      }
+
+      if (audioFiles.isEmpty) {
+        _logError('スキャン対象の曲が見つかりません。');
+        return 0;
+      }
+      
+      _log('${audioFiles.length}個のファイルをスキャン中...');
+
+      final existingSongs = await _dbHelper.getAllSongs();
+      final existingPaths = existingSongs.map((s) => s.filePath).toSet();
+
+      final List<Song> newSongs = [];
+      int processedCount = 0;
+      int skippedCount = 0;
+
+      for (final file in audioFiles) {
+        final relativePath = p.relative(file.path, from: appDir.path).replaceAll('\\', '/');
+
+        if (existingPaths.contains(relativePath)) {
+          skippedCount++;
+          continue;
+        }
+
+        try {
+          var song = await _createSongFromMetadata(file.path);
+
+          final key = file.path.substring(0, file.path.length - p.extension(file.path).length);
+          String? relativeLrcPath;
+          List<LyricLine> lyrics = [];
+          if (lrcFiles.containsKey(key)) {
+            final lrcFile = lrcFiles[key]!;
+            lyrics = await _parseLrcFile(lrcFile.path);
+            relativeLrcPath = p.relative(lrcFile.path, from: appDir.path).replaceAll('\\', '/');
+          }
+
+          song = song.copyWith(filePath: relativePath, lrcPath: relativeLrcPath, lyrics: lyrics);
+          await _dbHelper.insertOrUpdateSong(song);
+          newSongs.add(song);
+
+          processedCount++;
+          if (processedCount % 10 == 0) {
+            _log('$processedCount曲 スキャン完了...');
+            await Future.delayed(const Duration(milliseconds: 50));
+          }
+        } catch (e) {
+          _logError('ファイル読込エラー: $e');
+          continue; 
+        }
+      }
+
+      if (newSongs.isNotEmpty) {
+        final previousLength = state.playlist.length;
+        final allSongs = [...state.playlist, ...newSongs];
+        state = state.copyWith(playlist: allSongs);
+
+        if (_player.audioSource == null) {
+          final audioSources = <AudioSource>[];
+          for (final song in allSongs) {
+            final fullPath = await _getFullPath(song.filePath);
+            if (Platform.isAndroid || Platform.isIOS) {
+              audioSources.add(AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null)));
+            } else {
+              audioSources.add(LocalFileStreamAudioSource(fullPath));
+            }
+          }
+          final playlist = ConcatenatingAudioSource(children: audioSources);
+          await _player.setAudioSource(playlist, initialIndex: previousLength);
+          _player.play();
+        } else {
+          await _appendSongsToCurrentPlaylist(newSongs);
+        }
+      }
+      _log('スキャン完了! 追加:${newSongs.length} スキップ:$skippedCount');
+      return newSongs.length;
+    } catch (e) {
+      _logError('スキャン中に致命的エラー: $e');
+      return 0;
+    } finally {
+      state = state.copyWith(isLoading: false);
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) state = state.copyWith(clearError: true);
+      });
+    }
+  }
+
   Future<void> _appendSongsToCurrentPlaylist(List<Song> newSongs) async {
     final newAudioSources = <AudioSource>[];
     for (final song in newSongs) {
@@ -671,7 +700,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       if (lrcPath == null) return;
       await updateSongLrcPath(state.currentSong!.id, lrcPath);
     } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to load lyrics: $e');
+      _logError('歌詞追加エラー: $e');
     }
   }
 
@@ -716,7 +745,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       }).toList();
       state = state.copyWith(playlist: updatedPlaylist);
     } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to toggle favorite: $e');
+      _logError('お気に入り切替エラー: $e');
     }
   }
 
@@ -746,7 +775,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       }
       state = state.copyWith(playlist: updatedPlaylist, currentSongIndex: newCurrentIndex);
     } catch (e) {
-      state = state.copyWith(errorMessage: 'Failed to remove song: $e');
+      _logError('曲の削除エラー: $e');
     }
   }
 
@@ -817,7 +846,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       
       loadAlbumArtForCurrentSong();
     } catch (e) {
-      state = state.copyWith(isLoading: false, errorMessage: 'Failed to load playlist: $e');
+      state = state.copyWith(isLoading: false, errorMessage: '再生エラー: $e');
     }
   }
 
