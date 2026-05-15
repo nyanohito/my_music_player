@@ -284,8 +284,9 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     // - androidAudioFocus: gain → 他アプリの音声を完全に退かせる（ナビ案内は duck で共存）
     await session.configure(const AudioSessionConfiguration(
       avAudioSessionCategory: AVAudioSessionCategory.playback,
+      // 🚨 修正1: allowBluetoothA2DP の 'DP' を 'dp' に修正
       avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
-          AVAudioSessionCategoryOptions.allowBluetoothA2DP,
+          AVAudioSessionCategoryOptions.allowBluetoothA2dp,
       avAudioSessionMode: AVAudioSessionMode.defaultMode,
       avAudioSessionRouteSharingPolicy:
           AVAudioSessionRouteSharingPolicy.longFormAudio,
@@ -323,9 +324,9 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
     // Feature 2: Bluetooth接続/切断イベントを監視し、接続時に再生再開
     session.devicesChangedEventStream.listen((event) {
+      // 🚨 修正2: 存在しない 'bluetooth' を削除し、名前ベースの安全な判定に変更
       final connected = event.devicesAdded.where((d) =>
-          d.type == AudioDeviceType.bluetooth ||
-          d.type == AudioDeviceType.bluetoothA2dp);
+          d.type.name.toLowerCase().contains('bluetooth'));
       if (connected.isNotEmpty && !_player.playing && state.hasSongs) {
         // Bluetooth デバイスが接続されたら0.5秒待って再生
         Future.delayed(const Duration(milliseconds: 500), () {
@@ -674,7 +675,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         return 0;
       }
 
-      _log('\${audioFiles.length}個のファイルをスキャン中...');
+      _log('${audioFiles.length}個のファイルをスキャン中...');
 
       // Feature 4: 既存DBの modifiedAt マップを一括取得
       final existingModMap  = await _dbHelper.getSongModifiedAtMap();
@@ -745,12 +746,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
           processedCount++;
           if (processedCount % 10 == 0) {
-            _log('\$processedCount曲 スキャン完了...');
+            _log('$processedCount曲 スキャン完了...');
             await Future.delayed(const Duration(milliseconds: 50));
           }
         } catch (e) {
           // Feature 4: 失敗ファイルを破損リストに登録
-          _logError('ファイル読込エラー: \$e');
+          _logError('ファイル読込エラー: $e');
           await _dbHelper.addBrokenFile(relativePath, errorMsg: e.toString());
           continue;
         }
@@ -788,12 +789,12 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         }
       }
 
-      _log('スキャン完了! 追加:\${newSongs.length} '
-          '更新:\${updatedSongs.length} スキップ:\$skippedCount '
-          '破損スキップ:\${brokenPaths.length}');
+      _log('スキャン完了! 追加:${newSongs.length} '
+          '更新:${updatedSongs.length} スキップ:$skippedCount '
+          '破損スキップ:${brokenPaths.length}');
       return newSongs.length;
     } catch (e) {
-      _logError('スキャン中に致命的エラー: \$e');
+      _logError('スキャン中に致命的エラー: $e');
       return 0;
     } finally {
       state = state.copyWith(isLoading: false);
