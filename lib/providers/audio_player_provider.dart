@@ -142,6 +142,10 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
   StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
   StreamSubscription<int?>? _currentIndexSubscription;
+  StreamSubscription<void>? _interruptionSubscription; // Feature 2: 割り込み復帰
+
+  // Feature 1: 再生状態を5秒おきに保存するための最終保存時刻
+  DateTime _lastStateSavedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   // --- 📝 ログ管理用ヘルパー ---
   void _log(String message) {
@@ -240,14 +244,97 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         await _player.setAudioSource(playlist, initialPosition: Duration.zero, preload: false);
       }
       _log('起動完了: 有効な曲は ${validSongs.length} 曲です。');
+
+      // Feature 1: 保存された再生状態を復元する
+      await _restorePlaybackState(validSongs.length);
+
     } catch (e) {
       _logError('起動時ロードエラー: $e');
     }
   }
 
+  /// Feature 1: 起動時に最後の再生位置へシークする（再生はしない）
+  Future<void> _restorePlaybackState(int playlistLength) async {
+    try {
+      final saved = await _dbHelper.loadPlaybackState();
+      if (saved == null) return;
+      if (saved.songIndex < 0 || saved.songIndex >= playlistLength) return;
+
+      _log('前回の再生位置を復元: index=${saved.songIndex}, pos=${saved.positionMs}ms');
+
+      // プレイヤーに反映（seek のみ。play() は呼ばない）
+      await _player.seek(
+        Duration(milliseconds: saved.positionMs),
+        index: saved.songIndex,
+      );
+      state = state.copyWith(currentSongIndex: saved.songIndex);
+    } catch (e) {
+      // 復元失敗は致命的ではないので握り潰す
+      print('[AudioPlayer] restorePlaybackState failed: $e');
+    }
+  }
+
   Future<void> _initAudioSession() async {
     final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
+
+    // Feature 2: Spotify相当のオーディオセッション設定
+    // - avAudioSessionCategory: playback → バックグラウンド再生 + CarPlay 優先認識
+    // - avAudioSessionMode: defaultMode → 音楽再生に最適
+    // - avAudioSessionRouteSharingPolicy: longFormAudio → AirPlay/CarPlay で優先ルーティング
+    // - androidAudioFocus: gain → 他アプリの音声を完全に退かせる（ナビ案内は duck で共存）
+    await session.configure(const AudioSessionConfiguration(
+      avAudioSessionCategory: AVAudioSessionCategory.playback,
+      avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
+          AVAudioSessionCategoryOptions.allowBluetoothA2DP,
+      avAudioSessionMode: AVAudioSessionMode.defaultMode,
+      avAudioSessionRouteSharingPolicy:
+          AVAudioSessionRouteSharingPolicy.longFormAudio,
+      avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+      androidAudioAttributes: AndroidAudioAttributes(
+        contentType: AndroidAudioContentType.music,
+        flags: AndroidAudioFlags.none,
+        usage: AndroidAudioUsage.media,
+      ),
+      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+      androidWillPauseWhenDucked: false, // ナビ案内時は duck（音量下げ）で共存
+    ));
+
+    // Feature 2: 割り込み（電話・Siri・ナビ）からの復帰処理
+    _interruptionSubscription = session.interruptionEventStream.listen((event) {
+      if (event.begin) {
+        // 割り込み開始 → 一時停止
+        if (_player.playing) _player.pause();
+      } else {
+        // 割り込み終了 → shouldResume が true なら自動再生再開
+        switch (event.type) {
+          case AudioInterruptionType.pause:
+          case AudioInterruptionType.duck:
+            if (event.type == AudioInterruptionType.duck) {
+              // duck 終了は音量を戻すだけ（just_audio が自動処理）
+            } else if (state.isPlaying) {
+              _player.play();
+            }
+            break;
+          case AudioInterruptionType.unknown:
+            break;
+        }
+      }
+    });
+
+    // Feature 2: Bluetooth接続/切断イベントを監視し、接続時に再生再開
+    session.devicesChangedEventStream.listen((event) {
+      final connected = event.devicesAdded.where((d) =>
+          d.type == AudioDeviceType.bluetooth ||
+          d.type == AudioDeviceType.bluetoothA2dp);
+      if (connected.isNotEmpty && !_player.playing && state.hasSongs) {
+        // Bluetooth デバイスが接続されたら0.5秒待って再生
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (!_player.playing) _player.play();
+        });
+      }
+    });
+
+    await session.setActive(true);
   }
 
   void _subscribeToPlayerStreams() {
@@ -255,6 +342,17 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       final safePosition = position > state.duration ? state.duration : position;
       final lyricIndex = _getCurrentLyricIndex(state.currentSong?.lyrics ?? [], safePosition);
       state = state.copyWith(position: safePosition, currentLyricIndex: lyricIndex);
+
+      // Feature 1: 5秒おきに再生状態を永続化（連続書き込みを防ぐ）
+      final now = DateTime.now();
+      if (state.currentSongIndex >= 0 &&
+          now.difference(_lastStateSavedAt).inSeconds >= 5) {
+        _lastStateSavedAt = now;
+        _dbHelper.savePlaybackState(
+          songIndex: state.currentSongIndex,
+          positionMs: safePosition.inMilliseconds,
+        );
+      }
     });
 
     _durationSubscription = _player.durationStream.listen((duration) {
@@ -543,14 +641,18 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     }
   }
 
+  /// Feature 4: インクリメンタルスキャン
+  /// - ファイルの最終更新日時を比較し、変更がある曲だけ更新する
+  /// - MetadataGod が失敗したファイルを破損リストに追加してフリーズを防ぐ
   Future<int> scanLocalDocuments() async {
     state = state.copyWith(isLoading: true);
-    _log('スキャン開始: フォルダ内を検索中...');
+    _log('スキャン開始: インクリメンタルモード');
     try {
       final appDir = await getApplicationDocumentsDirectory();
-      final List<FileSystemEntity> entities = await appDir.list(recursive: true).toList();
+      final List<FileSystemEntity> entities =
+          await appDir.list(recursive: true).toList();
 
-      final audioExtensions = ['.mp3', '.m4a', '.flac', '.wav', '.aac'];
+      final audioExtensions = {'.mp3', '.m4a', '.flac', '.wav', '.aac'};
       final List<File> audioFiles = [];
       final Map<String, File> lrcFiles = {};
 
@@ -560,7 +662,8 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           if (audioExtensions.contains(ext)) {
             audioFiles.add(entity);
           } else if (ext == '.lrc') {
-            final key = entity.path.substring(0, entity.path.length - ext.length);
+            final key = entity.path.substring(
+                0, entity.path.length - ext.length);
             lrcFiles[key] = entity;
           }
         }
@@ -570,20 +673,43 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         _logError('スキャン対象の曲が見つかりません。');
         return 0;
       }
-      
-      _log('${audioFiles.length}個のファイルをスキャン中...');
 
-      final existingSongs = await _dbHelper.getAllSongs();
-      final existingPaths = existingSongs.map((s) => s.filePath).toSet();
+      _log('\${audioFiles.length}個のファイルをスキャン中...');
 
-      final List<Song> newSongs = [];
-      int processedCount = 0;
+      // Feature 4: 既存DBの modifiedAt マップを一括取得
+      final existingModMap  = await _dbHelper.getSongModifiedAtMap();
+      // Feature 4: 破損ファイルリストを取得（スキャン除外用）
+      final brokenPaths     = await _dbHelper.getBrokenFilePaths();
+
+      final List<Song> newSongs     = [];
+      final List<Song> updatedSongs = [];
       int skippedCount = 0;
+      int processedCount = 0;
 
       for (final file in audioFiles) {
-        final relativePath = p.relative(file.path, from: appDir.path).replaceAll('\\', '/');
+        final relativePath = p.relative(file.path, from: appDir.path)
+            .replaceAll('\\', '/');
 
-        if (existingPaths.contains(relativePath)) {
+        // Feature 4: 破損ファイルはスキップ
+        if (brokenPaths.contains(relativePath) ||
+            brokenPaths.contains(file.path)) {
+          skippedCount++;
+          continue;
+        }
+
+        // Feature 4: ファイルの最終更新日時を取得
+        int fileModifiedAt = 0;
+        try {
+          final stat = await file.stat();
+          fileModifiedAt = stat.modified.millisecondsSinceEpoch ~/ 1000;
+        } catch (_) {}
+
+        final savedModifiedAt = existingModMap[relativePath] ?? 0;
+
+        // Feature 4: DB に保存済みで、更新日時も同じならスキップ
+        if (existingModMap.containsKey(relativePath) &&
+            savedModifiedAt > 0 &&
+            fileModifiedAt <= savedModifiedAt) {
           skippedCount++;
           continue;
         }
@@ -591,27 +717,42 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
         try {
           var song = await _createSongFromMetadata(file.path);
 
-          final key = file.path.substring(0, file.path.length - p.extension(file.path).length);
+          final key = file.path.substring(
+              0, file.path.length - p.extension(file.path).length);
           String? relativeLrcPath;
           List<LyricLine> lyrics = [];
           if (lrcFiles.containsKey(key)) {
             final lrcFile = lrcFiles[key]!;
             lyrics = await _parseLrcFile(lrcFile.path);
-            relativeLrcPath = p.relative(lrcFile.path, from: appDir.path).replaceAll('\\', '/');
+            relativeLrcPath = p.relative(lrcFile.path, from: appDir.path)
+                .replaceAll('\\', '/');
           }
 
-          song = song.copyWith(filePath: relativePath, lrcPath: relativeLrcPath, lyrics: lyrics);
+          song = song.copyWith(
+            filePath: relativePath,
+            lrcPath: relativeLrcPath,
+            lyrics: lyrics,
+          );
           await _dbHelper.insertOrUpdateSong(song);
-          newSongs.add(song);
+          // Feature 4: 更新日時をDBに記録
+          await _dbHelper.updateSongModifiedAt(song.id, fileModifiedAt);
+
+          if (existingModMap.containsKey(relativePath)) {
+            updatedSongs.add(song);
+          } else {
+            newSongs.add(song);
+          }
 
           processedCount++;
           if (processedCount % 10 == 0) {
-            _log('$processedCount曲 スキャン完了...');
+            _log('\$processedCount曲 スキャン完了...');
             await Future.delayed(const Duration(milliseconds: 50));
           }
         } catch (e) {
-          _logError('ファイル読込エラー: $e');
-          continue; 
+          // Feature 4: 失敗ファイルを破損リストに登録
+          _logError('ファイル読込エラー: \$e');
+          await _dbHelper.addBrokenFile(relativePath, errorMsg: e.toString());
+          continue;
         }
       }
 
@@ -625,22 +766,34 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
           for (final song in allSongs) {
             final fullPath = await _getFullPath(song.filePath);
             if (Platform.isAndroid || Platform.isIOS) {
-              audioSources.add(AudioSource.uri(Uri.file(fullPath), tag: MediaItem(id: song.id, title: song.title, artist: song.artist, artUri: null)));
+              audioSources.add(AudioSource.uri(
+                Uri.file(fullPath),
+                tag: MediaItem(
+                  id: song.id,
+                  title: song.title,
+                  artist: song.artist,
+                  artUri: null,
+                ),
+              ));
             } else {
               audioSources.add(LocalFileStreamAudioSource(fullPath));
             }
           }
           final playlist = ConcatenatingAudioSource(children: audioSources);
-          await _player.setAudioSource(playlist, initialIndex: previousLength);
+          await _player.setAudioSource(
+              playlist, initialIndex: previousLength);
           _player.play();
         } else {
           await _appendSongsToCurrentPlaylist(newSongs);
         }
       }
-      _log('スキャン完了! 追加:${newSongs.length} スキップ:$skippedCount');
+
+      _log('スキャン完了! 追加:\${newSongs.length} '
+          '更新:\${updatedSongs.length} スキップ:\$skippedCount '
+          '破損スキップ:\${brokenPaths.length}');
       return newSongs.length;
     } catch (e) {
-      _logError('スキャン中に致命的エラー: $e');
+      _logError('スキャン中に致命的エラー: \$e');
       return 0;
     } finally {
       state = state.copyWith(isLoading: false);
@@ -649,6 +802,7 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
       });
     }
   }
+
 
   Future<void> _appendSongsToCurrentPlaylist(List<Song> newSongs) async {
     final newAudioSources = <AudioSource>[];
@@ -883,10 +1037,18 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
   @override
   void dispose() {
+    // Feature 1: アプリ終了時に最後の状態を保存
+    if (state.currentSongIndex >= 0) {
+      _dbHelper.savePlaybackState(
+        songIndex: state.currentSongIndex,
+        positionMs: state.position.inMilliseconds,
+      );
+    }
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _playerStateSubscription?.cancel();
     _currentIndexSubscription?.cancel();
+    _interruptionSubscription?.cancel(); // Feature 2
     _player.dispose();
     super.dispose();
   }

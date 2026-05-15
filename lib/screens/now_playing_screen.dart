@@ -16,6 +16,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../providers/audio_player_provider.dart';
 import '../theme/app_theme.dart';
+import 'package:wakelock_plus/wakelock_plus.dart'; // Feature 3: 画面スリープ防止
 import '../widgets/lyric_view.dart';
 import '../models/lyric_line.dart';
 
@@ -131,6 +132,9 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     final darkBase = Color.lerp(_dominantColor, Colors.black, 0.65) ?? Colors.black;
     final darkerBase = Color.lerp(_dominantColor, Colors.black, 0.88) ?? Colors.black;
 
+    // Feature 3: 歌詞フルスクリーン中は画面スリープを防止する
+    WakelockPlus.enable();
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -155,7 +159,11 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      // Feature 3: 歌詞画面を閉じたら画面スリープ防止を解除
+      // スワイプで閉じても・ボタンで閉じても必ず呼ばれる
+      WakelockPlus.disable();
+    });
   }
 
   void _showAudioRoutePicker(BuildContext context) async {

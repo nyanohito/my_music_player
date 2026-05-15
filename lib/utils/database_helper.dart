@@ -19,7 +19,7 @@ class DatabaseHelper {
   final Uuid _uuid = const Uuid();
 
   // ★ バージョンを 3 に上げる（再生履歴のバグ修正のためのリセット）
-  static const int _dbVersion = 3;
+  static const int _dbVersion = 4;
 
   /// Get database instance
   Future<Database> get database async {
@@ -89,6 +89,29 @@ class DatabaseHelper {
     await db.execute('CREATE INDEX idx_songs_title_artist ON songs(title, artist)');
     await db.execute('CREATE INDEX idx_playlist_songs_playlist_id ON playlist_songs(playlist_id)');
     await db.execute('CREATE INDEX idx_play_history_played_at ON play_history(played_at)');
+
+    // ── 再生状態永続化テーブル ────────────────────────────────
+    // アプリ再起動後に最後の再生位置を復元するためのKVストア
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_state (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
+
+    // ── 破損ファイルキャッシュテーブル ────────────────────────
+    // MetadataGod が失敗したパスを記録し、次回スキャンをスキップする
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS broken_files (
+        file_path  TEXT PRIMARY KEY,
+        failed_at  INTEGER NOT NULL,
+        error_msg  TEXT
+      )
+    ''');
+
+    // ── インクリメンタルスキャン用: 最終更新日時カラム ─────────
+    // songs テーブルに file_modified_at を追加（新規作成時から）
+    await db.execute('ALTER TABLE songs ADD COLUMN file_modified_at INTEGER DEFAULT 0');
   }
 
   /// ★ マイグレーション処理
@@ -100,6 +123,35 @@ class DatabaseHelper {
     if (oldVersion < 3) {
       // v3: 再生履歴の型不一致バグを修正するため、古いバグデータをリセットする
       try { await db.execute('DELETE FROM play_history'); } catch (_) {}
+    }
+    if (oldVersion < 4) {
+      // v4: 再生状態永続化テーブルを追加
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS app_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+          )
+        ''');
+      } catch (_) {}
+
+      // v4: 破損ファイルキャッシュテーブルを追加
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS broken_files (
+            file_path  TEXT PRIMARY KEY,
+            failed_at  INTEGER NOT NULL,
+            error_msg  TEXT
+          )
+        ''');
+      } catch (_) {}
+
+      // v4: songs テーブルに更新日時カラムを追加
+      try {
+        await db.execute(
+          'ALTER TABLE songs ADD COLUMN file_modified_at INTEGER DEFAULT 0',
+        );
+      } catch (_) {}
     }
   }
 
@@ -227,6 +279,113 @@ class DatabaseHelper {
     final db = await database;
     final result = await db.query('playlist_songs', where: 'song_id = ?', whereArgs: [songId], limit: 1);
     return result.isNotEmpty;
+  }
+
+
+  // ──────────────────────────────────────────────────────────
+  // 再生状態の永続化（Feature 1: Resume Playback）
+  // ──────────────────────────────────────────────────────────
+
+  /// 再生状態をDBに保存する
+  /// [songIndex]: プレイリスト内のインデックス
+  /// [positionMs]: 再生位置（ミリ秒）
+  Future<void> savePlaybackState({
+    required int songIndex,
+    required int positionMs,
+  }) async {
+    final db = await database;
+    final batch = db.batch();
+    batch.insert(
+      'app_state',
+      {'key': 'last_song_index', 'value': songIndex.toString()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    batch.insert(
+      'app_state',
+      {'key': 'last_position_ms', 'value': positionMs.toString()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await batch.commit(noResult: true);
+  }
+
+  /// 保存された再生状態を取得する
+  /// 保存されていない場合は null を返す
+  Future<({int songIndex, int positionMs})?> loadPlaybackState() async {
+    final db = await database;
+    final rows = await db.query(
+      'app_state',
+      where: "key IN ('last_song_index', 'last_position_ms')",
+    );
+    final map = {for (final r in rows) r['key'] as String: r['value'] as String};
+    if (!map.containsKey('last_song_index') ||
+        !map.containsKey('last_position_ms')) {
+      return null;
+    }
+    final index = int.tryParse(map['last_song_index']!);
+    final posMs  = int.tryParse(map['last_position_ms']!);
+    if (index == null || posMs == null) return null;
+    return (songIndex: index, positionMs: posMs);
+  }
+
+  /// 再生状態の保存データを削除する（リセット時に呼ぶ）
+  Future<void> clearPlaybackState() async {
+    final db = await database;
+    await db.delete(
+      'app_state',
+      where: "key IN ('last_song_index', 'last_position_ms')",
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // 破損ファイルキャッシュ（Feature 4: インクリメンタルスキャン）
+  // ──────────────────────────────────────────────────────────
+
+  /// ファイルを破損リストに追加する
+  Future<void> addBrokenFile(String filePath, {String? errorMsg}) async {
+    final db = await database;
+    await db.insert(
+      'broken_files',
+      {
+        'file_path': filePath,
+        'failed_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'error_msg': errorMsg,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// 破損ファイルのパス一覧を取得する
+  Future<Set<String>> getBrokenFilePaths() async {
+    final db = await database;
+    final rows = await db.query('broken_files', columns: ['file_path']);
+    return rows.map((r) => r['file_path'] as String).toSet();
+  }
+
+  /// 破損リストをクリア（ユーザーが手動リスキャンするとき）
+  Future<void> clearBrokenFiles() async {
+    final db = await database;
+    await db.delete('broken_files');
+  }
+
+  /// songs テーブルの file_modified_at を更新する
+  Future<void> updateSongModifiedAt(String songId, int modifiedAt) async {
+    final db = await database;
+    await db.update(
+      'songs',
+      {'file_modified_at': modifiedAt},
+      where: 'id = ?',
+      whereArgs: [songId],
+    );
+  }
+
+  /// file_path → file_modified_at のマップを一括取得（スキャン高速化）
+  Future<Map<String, int>> getSongModifiedAtMap() async {
+    final db = await database;
+    final rows = await db.query('songs', columns: ['file_path', 'file_modified_at']);
+    return {
+      for (final r in rows)
+        r['file_path'] as String: (r['file_modified_at'] as int?) ?? 0,
+    };
   }
 
   Future<void> close() async {
