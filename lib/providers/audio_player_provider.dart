@@ -278,20 +278,17 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
     final session = await AudioSession.instance;
 
     // Feature 2: Spotify相当のオーディオセッション設定
-    // - avAudioSessionCategory: playback → バックグラウンド再生 + CarPlay 優先認識
-    // - avAudioSessionMode: defaultMode → 音楽再生に最適
-    // - avAudioSessionRouteSharingPolicy: longFormAudio → AirPlay/CarPlay で優先ルーティング
-    // - androidAudioFocus: gain → 他アプリの音声を完全に退かせる（ナビ案内は duck で共存）
-    await session.configure(const AudioSessionConfiguration(
+    // 🚨 修正: `AudioSessionConfiguration` の前の `const` を削除しました
+    await session.configure(AudioSessionConfiguration(
       avAudioSessionCategory: AVAudioSessionCategory.playback,
-      // 🚨 修正1: allowBluetoothA2DP の 'DP' を 'dp' に修正
       avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
           AVAudioSessionCategoryOptions.allowBluetoothA2dp,
       avAudioSessionMode: AVAudioSessionMode.defaultMode,
       avAudioSessionRouteSharingPolicy:
           AVAudioSessionRouteSharingPolicy.longFormAudio,
       avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
-      androidAudioAttributes: AndroidAudioAttributes(
+      // 代わりにこちらに const を付けます
+      androidAudioAttributes: const AndroidAudioAttributes(
         contentType: AndroidAudioContentType.music,
         flags: AndroidAudioFlags.none,
         usage: AndroidAudioUsage.media,
@@ -324,7 +321,6 @@ class AudioPlayerNotifier extends StateNotifier<AudioPlayerState> {
 
     // Feature 2: Bluetooth接続/切断イベントを監視し、接続時に再生再開
     session.devicesChangedEventStream.listen((event) {
-      // 🚨 修正2: 存在しない 'bluetooth' を削除し、名前ベースの安全な判定に変更
       final connected = event.devicesAdded.where((d) =>
           d.type.name.toLowerCase().contains('bluetooth'));
       if (connected.isNotEmpty && !_player.playing && state.hasSongs) {
